@@ -1,0 +1,6 @@
+.idea
+*.lst
+*.obj
+*.o
+*.log
+*.map
