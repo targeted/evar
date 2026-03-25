@@ -1,18 +1,94 @@
+/*
+ * This header is supposed to be included in every task implementation.
+ * It generates the task structures and declares the task methods which
+ * are left for the source file to implement.
+ */
+
 #ifndef EVAR_TASK_H
 #define EVAR_TASK_H
 
+#include <evar_types.h>
+#include <evar_device.h>
+#include <evar_assert.h>
+
+#ifdef EVAR_TASK_NAME
+
 /*
- * This header is supposed to be included in every task implementation.
- * It generates the task structures, such as message queue and declares
- * the task methods which are left for the source file to implement.
+ * Include the header for the task being implemented,
+ * it contains the task data and message structures.
+ */
+#include EVAR_QUOTE(EVAR_TASK_NAME.h)
+
+/*
+ * To start a new task.
+ */
+evar_task_id_t evar__create_task(evar_task_t* p_task, void* p_task_data);
+
+/*
+ * Sends a message from the current running task to another task.
+ * Interrupt handlers and possibly other asynchronous sources
+ * should use evar__send_async_message.
+ */
+evar_mq_result_t evar__send_message(evar_task_id_t receiver, void* p_message, evar_message_size_t message_size);
+
+/*
+ * The internal structure of the message store is invisible here.
+ * A task allocates it as an opaque array of bytes and uses
+ * evar__initialize_message_store to initialize it.
  */
 
-#ifndef EVAR_TASK_NAME
-#error EVAR_TASK_NAME must be defined
-#endif
+#define MESSAGE_STORE_SIZE(CAPACITY) ((EVAR_MESSAGE_STORE_SIZE) + (CAPACITY) * sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)))
 
-#include <evar.h>
-#include <evar_message_queue.h>
+/*
+ * Private visibility, initializes the message store in place, returns the same pointer re-cast.
+ */
+evar_message_store_t* _evar__initialize_message_store(
+    void* p_message_store,
+    evar_message_count_t capacity,
+    evar_message_size_t message_size
+);
+
+static evar_message_store_t* evar__initialize_message_store(void* p_message_store, evar_message_count_t capacity) {
+    return _evar__initialize_message_store(p_message_store, capacity, sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)));
+}
+
+void EVAR_CONCAT(evar__initialize_message_store_, EVAR_TASK_NAME)(void) {
+    (void)evar__initialize_message_store; // mark as used
+}
+
+/*
+ * Private visibility, returns the first message from the current task's queue.
+ * The received message is removed from the queue.
+ */
+evar_mq_result_t _evar__receive_message(void* p_message, evar_message_size_t message_size);
+
+/*
+ * This task-specific implementation restricts the type of the message to be received.
+ */
+static evar_mq_result_t evar__receive_message(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)* p_message) {
+    return _evar__receive_message(p_message, sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)));
+}
+
+void EVAR_CONCAT(evar__receive_message_, EVAR_TASK_NAME)(void) {
+    (void)evar__receive_message; // mark as used
+}
+
+/*
+ * Private visibility, returns a copy of the first message for the current task,
+ * but does not remove it from the queue.
+ */
+evar_mq_result_t _evar__preview_message(void* p_message, evar_message_size_t message_size);
+
+/*
+ * This task-specific implementation restricts the type of the message to be previewed.
+ */
+static evar_mq_result_t evar__preview_message(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)* p_message) {
+    return _evar__preview_message(p_message, sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)));
+}
+
+void EVAR_CONCAT(evar__preview_message_, EVAR_TASK_NAME)(void) {
+    (void)evar__preview_message; // mark as used
+}
 
 /*
  * The following declarations lay out the task interface, the definitions
@@ -20,62 +96,37 @@
  */
 
 /*
- * Initializes the task before it is about to run for the first time.
- * In the task_info:
- * current_task    = actual, informational
- * parent_task     = actual, informational
- * p_task_data     = initialization parameter, could be reallocated and overwritten, the new value will linger
- * p_message_store = points to the default statically allocated buffer, good for one instance of the task,
- *                   or many instances if they choose to share the same queue as equal readers, could be
- *                   reallocated, the new value will linger
+ * Initializes the task after it has been created but before it runs.
+ * In its initialization a task can create other tasks, which is a form
+ * of indirect recursion.
  */
 static void EVAR_CONCAT(EVAR_TASK_NAME, __initialize)(evar_task_info_t* p_task_info);
 
 /*
- * One of the following three functions will be invoked by the scheduler,
- * depending on what was the reason for picking that task:
- * 1. When the task had messages in its queue     -> {EVAR_TASK_NAME}__receive()
- * 2. When the sleep timeout expired for the task -> {EVAR_TASK_NAME}__wake_up()
- * 3. Otherwise, when the task was running        -> {EVAR_TASK_NAME}__run()
+ * One of the following three task's functions will be invoked by the scheduler,
+ * which one exactly depending on what was the reason for picking that task.
  */
 
 /*
- * Executed when the task was running.
- * In the task_info:
- * current_task    = actual, informational
- * parent_task     = actual, informational
- * p_task_data     = actual, as returned from __initialize
- * p_message_store = actual, as returned from __initialize
+ * Executed when the task was running continously using evar_task__keep_running().
  */
 static void EVAR_CONCAT(EVAR_TASK_NAME, __run)(evar_task_info_t* p_task_info);
 
 /*
- * Executed when the sleep interval elapses.
- * In the task_info:
- * current_task    = actual, informational
- * parent_task     = actual, informational
- * p_task_data     = actual, as returned from __initialize
- * p_message_store = actual, as returned from __initialize
+ * Executed when the task was sleeping using either evar_task__sleep_for()
+ * or evar_task__sleep_next() and its sleep interval expired.
  */
 static void EVAR_CONCAT(EVAR_TASK_NAME, __wake_up)(evar_task_info_t* p_task_info);
 
 /*
- * Executed when the task had messages in its queue.
- * In the task_info:
- * current_task    = actual, informational
- * parent_task     = actual, informational
- * p_task_data     = actual, as returned from __initialize
- * p_message_store = actual, as returned from __initialize
+ * Executed when messages had appeared in the task's message queue
+ * (even though it was running or sleeping). Receiving a message wakes
+ * the task up immediately and unconditionally.
  */
 static void EVAR_CONCAT(EVAR_TASK_NAME, __receive)(evar_task_info_t* p_task_info);
 
 /*
- * Cleans up after the task has exited.
- * In the task_info:
- * current_task    = actual, informational
- * parent_task     = actual, informational
- * p_task_data     = actual, to be cleaned up, if returned from __initialize
- * p_message_store = actual, to be cleaned up, if returned from __initialize
+ * Is called to clean up after the task returns with evar_task__exit().
  */
 static void EVAR_CONCAT(EVAR_TASK_NAME, __cleanup)(evar_task_info_t* p_task_info);
 
@@ -83,11 +134,6 @@ static void EVAR_CONCAT(EVAR_TASK_NAME, __cleanup)(evar_task_info_t* p_task_info
  * This is a class-like structure with methods and static members.
  */
 static evar_task_t EVAR_CONCAT(_, EVAR_TASK_NAME) = {
-#ifdef EVAR_TASK_HAS_MESSAGE_QUEUE
-    &(EVAR_CONCAT(EVAR_TASK_NAME, _message_queue)),
-#else
-    NULL,
-#endif
     EVAR_CONCAT(EVAR_TASK_NAME, __initialize),
     EVAR_CONCAT(EVAR_TASK_NAME, __run),
     EVAR_CONCAT(EVAR_TASK_NAME, __wake_up),
@@ -150,7 +196,56 @@ void evar_task__sleep_for(evar_interval_t usec);
  * if a call to evar_task__sleep_next is made and the interval did not elapse.
  * But the moment the interval does elapse (e.g. at moment 101), the same
  * call evar_task__sleep_next(100) will put the task to sleep until moment 200.
+ * As with the other cases, if there is a message in the queue, the task will
+ * wake immediately.
  */
 void evar_task__sleep_next(evar_interval_t usec);
+
+#endif
+
+/*
+ * The rest of the functions are not task-specific and can be included
+ * in source files that are not implementing tasks themselves.
+ */
+
+/*
+ * Sends an asynchronous message from an interrupt handler to a task.
+ * This function should only be used by interrupt handlers and possibly
+ * other asynchronous sources. The tasks should use evar__send_message.
+ * This can be executed with or without interrupts disabled. Interrupts
+ * will be disabled for the push operation, and the previous state of
+ * interrupts will be restored at exit.
+ * Note that this is a possible cause of re-entering, if another interrupt
+ * happens after execution of this function starts, and another handler
+ * also needs to send a message. If re-entrancy is a problem, as with
+ * compiled stack, interrupts must be disabled before calling this.
+ */
+evar_mq_result_t evar__send_async_message(
+    evar_task_id_t receiver,
+    void* p_message,
+    evar_message_size_t message_size
+);
+
+/*
+ * Returns the current absolute timestamp in microseconds. The returned
+ * value is opaque and is only useful with evar__get_time_delta below.
+ */
+void evar__get_current_timestamp(evar_timestamp_t* p_timestamp);
+
+/*
+ * Returns the *signed* time delta between two timestamps in microseconds. The maximum
+ * value is about +-35 minutes, after that the maximum signed value will be returned.
+ */
+evar_time_delta_t evar__get_time_delta(evar_timestamp_t* p_timestamp1, evar_timestamp_t* p_timestamp2);
+
+/*
+ * Displays a debugging code/message, then halts.
+ */
+void evar__crash(unsigned short error, char* message);
+
+/*
+ * Immediate device shutdown, hardware halt.
+ */
+void evar__halt(void);
 
 #endif

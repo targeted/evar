@@ -25,51 +25,42 @@
 
 #include <string.h>
 #include <evar.h>
+#include <evar_internal_types.h>
 #include <evar_vars.h>
+#include <evar_device.h>
+#include <evar_assert.h>
 
 /*
- * The following defines allow for priority tuning, e.g. if a task keeps receiving messages,
- * it will be allowed to execute four times before a task running in background will finally
- * supersede it.
+ * Helper macros for manipulating the task lists.
  */
-#define EVAR_QUANTA_PER_ROUND (4)
-#define EVAR_RECEIVED_QUANTA  (1)
-#define EVAR_SLEEPING_QUANTA  (2)
-#define EVAR_RUNNING_QUANTA   (4)
-
-/*
- * This check is not strictly mandatory, but it is nice to avoid rounding.
- * The conversion may not necessarily be to a power of 10, with a source clock of 1MHz
- * one nice and fast to calculate option is to have the timer tick 15625 times per second,
- * then EVAR_USEC_TO_TICKS is (usec >> 6), EVAR_TICKS_TO_USEC is (ticks << 6),
- * and the practical minimal application level intervals are around 0.1ms.
- */
-//EVAR_ASSERT(EVAR_TICKS_TO_USEC(EVAR_USEC_TO_TICKS(1000000)) == 1000000, whole_usec_to_ticks);
 
 #define VALID(task) ((task) < (EVAR_MAX_TASKS))
 EVAR_ASSERT(!VALID(EVAR_INVALID_TASK_ID), invalid_task_id);
 
-#define WAKE_UP_AT(task) (evar_task_entries[task].wake_up_at)
-#define NEXT_UP_AT(task) (evar_task_entries[task].next_up_at)
+#define WAKE_UP_AT(task) (_evar_task_entries[task].wake_up_at)
+#define NEXT_UP_AT(task) (_evar_task_entries[task].next_up_at)
 
-#define P_TASK(task) (evar_task_structs[task].p_task)
-#define P_MESSAGE_QUEUE(task) (P_TASK(task)->p_message_queue)
-#define P_TASK_INFO(task) (&evar_task_structs[task].task_info)
+#define P_TASK(task) (_evar_task_structs[task].p_task)
+#define P_TASK_INFO(task) (&_evar_task_structs[task].task_info)
 #define P_MESSAGE_STORE(task) (P_TASK_INFO(task)->p_message_store)
 
-#define PREV(task) (evar_task_entries[task].prev_task)
-#define NEXT(task) (evar_task_entries[task].next_task)
-#define LIST(task) (evar_task_entries[task].task_list)
+#define PREV(task) (_evar_task_entries[task].prev_task)
+#define NEXT(task) (_evar_task_entries[task].next_task)
+#define LIST(task) (_evar_task_entries[task].task_list)
 
-#define DETACHED(task) (evar_task_entries[task].detached)
-#define ACTIVE(task) (LIST(task) != AVAILABLE)
+#define DETACHED(task) (_evar_task_entries[task].detached)
+#define ACTIVE(task) (LIST(task) != AVAILABLE_LIST)
 
-#define HEAD(task_list) (evar_task_list_heads[task_list])
+#define HEAD(task_list) (_evar_task_list_heads[task_list])
+
+/*
+ * Internal utilities to manipulate the task lists.
+ */
 
 /*
  * Connects two consecutive elements in a bidirectional linked list.
  */
-static void link(evar_task_id_t prev, evar_task_id_t next) {
+static void link_tasks(evar_task_id_t prev, evar_task_id_t next) {
     evar_assert(VALID(prev));
     evar_assert(VALID(next));
     NEXT(prev) = next;
@@ -81,7 +72,7 @@ static void link(evar_task_id_t prev, evar_task_id_t next) {
  */
 static void remove_task(evar_task_id_t task) {
 
-    task_list_t task_list;
+    _evar_task_list_t task_list;
     evar_task_id_t prev;
     evar_task_id_t next;
 
@@ -97,12 +88,14 @@ static void remove_task(evar_task_id_t task) {
     else {
         next = NEXT(task);
         evar_assert(next != task);
-        link(prev, next);
+        link_tasks(prev, next);
         if (task == HEAD(task_list)) {
             HEAD(task_list) = next;
         }
     }
+
     DETACHED(task) = 1;
+    evar_assert(DETACHED(task));
 }
 
 /*
@@ -111,7 +104,7 @@ static void remove_task(evar_task_id_t task) {
  */
 static void insert_task(evar_task_id_t task, evar_task_id_t before_task) {
 
-    task_list_t task_list;
+    _evar_task_list_t task_list;
     evar_task_id_t prev;
 
     evar_assert(VALID(task));
@@ -120,21 +113,23 @@ static void insert_task(evar_task_id_t task, evar_task_id_t before_task) {
     evar_assert(!DETACHED(before_task));
 
     prev = PREV(before_task);
-    link(prev, task);
-    link(task, before_task);
+    link_tasks(prev, task);
+    link_tasks(task, before_task);
     task_list = LIST(before_task);
     LIST(task) = task_list;
     if (before_task == HEAD(task_list)) {
         HEAD(task_list) = task;
     }
+
     DETACHED(task) = 0;
+    evar_assert(!DETACHED(task));
 }
 
 /*
  * Appends a detached task at the end of a task list. The list can be empty,
  * then it becomes a list of one task.
  */
-static void append_task(evar_task_id_t task, task_list_t task_list) {
+static void append_task(evar_task_id_t task, _evar_task_list_t task_list) {
 
     evar_task_id_t head;
     evar_task_id_t tail;
@@ -149,11 +144,14 @@ static void append_task(evar_task_id_t task, task_list_t task_list) {
     }
     else {
         tail = PREV(head);
-        link(tail, task);
-        link(task, head);
+        link_tasks(tail, task);
+        link_tasks(task, head);
     }
+
     LIST(task) = task_list;
+
     DETACHED(task) = 0;
+    evar_assert(!DETACHED(task));
 }
 
 /*
@@ -168,12 +166,12 @@ static void append_task(evar_task_id_t task, task_list_t task_list) {
  */
 
 /*
- * Clears the asynchronously received task queue.
+ * Clear the asynchronously received task queue.
  * Must be executed with interrupts disabled.
  */
-static void clear_received_async(void) {
-    evar_received_async.count = 0;
-    memset(evar_received_async.bitmap, 0, sizeof(evar_received_async.bitmap));
+static void clear_received_async_queue(void) {
+    _evar_received_async_queue.count = 0;
+    memset(_evar_received_async_queue.bitmap, 0, sizeof(_evar_received_async_queue.bitmap));
 }
 
 /*
@@ -181,36 +179,36 @@ static void clear_received_async(void) {
  * If the task is not there, nothing happens.
  * Must be executed with interrupts disabled.
  */
-static void remove_task_from_received_async(evar_task_id_t task) {
+static void remove_task_from_received_async_queue(evar_task_id_t task) {
 
     evar_task_id_t i;
 
-    if (!(evar_received_async.bitmap[task >> 3] & (1 << (task & 7)))) { // the task is not registered
+    if (!(_evar_received_async_queue.bitmap[task >> 3] & (1 << (task & 7)))) { // the task is not registered
         return;
     }
 
-    evar_assert(evar_received_async.count > 0); // there has to be at least one task there
+    evar_assert(_evar_received_async_queue.count > 0); // there has to be at least one task there
 
     // find the task in the ordered list
 
-    for (i = 0; i < evar_received_async.count; ++i) {
-        if (evar_received_async.tasks[i] == task) {
+    for (i = 0; i < _evar_received_async_queue.count; ++i) {
+        if (_evar_received_async_queue.tasks[i] == task) {
             break;
         }
     }
 
-    evar_assert(i < evar_received_async.count); // the task must have been found
+    evar_assert(i < _evar_received_async_queue.count); // the task must have been found, because it was in the bitmap
 
     // the remaining tasks in the list must be shifted one position to the left to maintain order
 
-    while (++i < evar_received_async.count) {
-        evar_received_async.tasks[i - 1] = evar_received_async.tasks[i];
+    while (++i < _evar_received_async_queue.count) {
+        _evar_received_async_queue.tasks[i - 1] = _evar_received_async_queue.tasks[i];
     }
 
     // finally we unmark the removed task
 
-    evar_received_async.count -= 1;
-    evar_received_async.bitmap[task >> 3] &= ~(1 << (task & 7));
+    _evar_received_async_queue.count -= 1;
+    _evar_received_async_queue.bitmap[task >> 3] &= ~(1 << (task & 7));
 }
 
 /*
@@ -218,53 +216,51 @@ static void remove_task_from_received_async(evar_task_id_t task) {
  * If the task is already registered, nothing happens.
  * Must be executed with interrupts disabled.
  */
-static void register_task_as_received_async(evar_task_id_t task) {
+static void put_task_to_received_async_queue(evar_task_id_t task) {
 
-    if (evar_received_async.bitmap[task >> 3] & (1 << (task & 7))) { // the task is already registered
+    if (_evar_received_async_queue.bitmap[task >> 3] & (1 << (task & 7))) { // the task is already registered
         return;
     }
 
-    evar_assert(evar_received_async.count < (EVAR_MAX_TASKS)); // there must be space for at least one task
+    evar_assert(_evar_received_async_queue.count < (EVAR_MAX_TASKS)); // there must be space for at least one task
 
     // note that the new task appears at the end of the list,
     // thus making the list ordered by first message received
 
-    evar_received_async.tasks[evar_received_async.count++] = task;
-    evar_received_async.bitmap[task >> 3] |= 1 << (task & 7);
+    _evar_received_async_queue.tasks[_evar_received_async_queue.count++] = task;
+    _evar_received_async_queue.bitmap[task >> 3] |= 1 << (task & 7);
 }
 
 /*
  * Moves the tasks that have received asynchronous messages between two consequent
  * scheduler passes to the received task list. It is executed in the context of
- * the scheduler, outside any task, therefore all tasks must be on one list or
- * another, none can be detached.
- * Must be executed with interrupts disabled.
+ * the scheduler, outside any task, therefore all tasks must be settled in one
+ * list or another, none can be detached. Must be executed with interrupts disabled.
  */
-static void flush_received_async(void) {
+static void flush_received_async_queue(void) {
 
-    evar_task_id_t slot;
+    evar_task_id_t i;
     evar_task_id_t task;
 
-    if (evar_received_async.count > 0) { // there are tasks that have received asynchronous messages
+    if (_evar_received_async_queue.count > 0) { // there are tasks that have received asynchronous messages
 
         // note that this loop keeps the order of tasks being appended
         // the same as they were on the received_async_tasks list
         // i.e. the same order in which they have received messages
 
-        for (slot = 0; slot < evar_received_async.count; ++slot) {
-            task = evar_received_async.tasks[slot];
+        for (i = 0; i < _evar_received_async_queue.count; ++i) {
+            task = _evar_received_async_queue.tasks[i];
             evar_assert(VALID(task));
             evar_assert(!DETACHED(task));
-            if (ACTIVE(task) && LIST(task) != RECEIVED) {
+            if (ACTIVE(task) && (LIST(task) != RECEIVED_LIST)) {
                 remove_task(task);
-                append_task(task, RECEIVED);
+                append_task(task, RECEIVED_LIST);
             }
         }
 
         // after that, the async queue is cleared
 
-        evar_received_async.count = 0;
-        memset(evar_received_async.bitmap, 0, sizeof(evar_received_async.bitmap));
+        clear_received_async_queue();
     }
 }
 
@@ -272,25 +268,26 @@ static void flush_received_async(void) {
  * Initializes all the task structures. All the tasks are put on available list,
  * all the other lists are empty. The device is initialized to start the timer.
  */
-void evar__initialize(void) {
+static void initialize(void) {
 
     evar_task_id_t task;
 
     // the internal structures are hardware-agnostic and are initialized
     // before the device, in particular before starting the timer
 
-    HEAD(AVAILABLE) = EVAR_INVALID_TASK_ID;
-    HEAD(RUNNING)   = EVAR_INVALID_TASK_ID;
-    HEAD(SLEEPING)  = EVAR_INVALID_TASK_ID;
-    HEAD(RECEIVED)  = EVAR_INVALID_TASK_ID;
+    HEAD(AVAILABLE_LIST) = EVAR_INVALID_TASK_ID;
+    HEAD(RUNNING_LIST)   = EVAR_INVALID_TASK_ID;
+    HEAD(SLEEPING_LIST)  = EVAR_INVALID_TASK_ID;
+    HEAD(RECEIVED_LIST)  = EVAR_INVALID_TASK_ID;
 
     for (task = 0; task < (EVAR_MAX_TASKS); ++task) {
         DETACHED(task) = 1;
-        append_task(task, AVAILABLE);
+        append_task(task, AVAILABLE_LIST);
     }
-    evar_active_tasks = 0;
 
-    memset(evar_task_quanta, 0, sizeof(evar_task_quanta));
+    _evar_active_task_count = 0;
+
+    memset(_evar_task_quanta, 0, sizeof(_evar_task_quanta));
 
     // here the device is initialized, in particular the timer is started, if it is supported
 
@@ -298,17 +295,19 @@ void evar__initialize(void) {
 
     // time counting starts
 
-    evar_base_timestamp.high = 0;
-    evar_base_timestamp.low  = 0;
+    _evar_base_timestamp.high = 0;
+    _evar_base_timestamp.low  = 0;
 
-    evar_prev_timer_ticks = evar_device__get_timer_ticks();
-    evar_clock_ticks = 0;
+    _evar_prev_timer_ticks = evar_device__get_timer_ticks();
+    _evar_clock_ticks = 0;
 
-    // the async message registry is initialized after the device, only
-    // because it is expected to be accessed with interrupts disabled
+    _evar_current_timestamp = _evar_base_timestamp;
+
+    // the async received messages structure is initialized after the device,
+    // only because it is expected to be accessed with interrupts disabled
 
     evar_device__disable_interrupts();
-    clear_received_async();
+    clear_received_async_queue();
     evar_device__enable_interrupts();
 
     // now that the device is initialized, we pull all the diagnostic pins and LEDs down
@@ -324,7 +323,7 @@ void evar__initialize(void) {
 
     // no task to execute yet
 
-    evar_current_task = EVAR_INVALID_TASK_ID;
+    _evar_current_task = EVAR_INVALID_TASK_ID;
 }
 
 void evar__crash(unsigned short error, char* message) {
@@ -341,20 +340,36 @@ void evar__halt(void) {
 void evar_task__exit(void);
 
 /*
+ * Pointless thunks to fool the optimizer from optimizing away indirect calls.
+ */
+
+static void null_task_method(evar_task_info_t* p_task_info) {
+    EVAR_UNUSED(p_task_info);
+}
+
+evar_task_t _null_task = {
+    null_task_method,
+    null_task_method,
+    null_task_method,
+    null_task_method,
+    null_task_method
+};
+
+/*
  * Initializes one available task and moves it to running.
  * Returns the id of the created task.
  */
-evar_task_id_t evar__create_task(evar_task_t* p_task, evar_task_data_t* p_task_data) {
+evar_task_id_t evar__create_task(evar_task_t* p_task, void* p_task_data) {
 
     evar_task_id_t task;
     evar_task_info_t* p_task_info;
     evar_task_id_t prev_current_task;
 
-    task = HEAD(AVAILABLE);
+    task = HEAD(AVAILABLE_LIST);
     if (VALID(task)) {
 
-        evar_assert(evar_active_tasks < (EVAR_MAX_TASKS));
-        evar_active_tasks += 1;
+        evar_assert(_evar_active_task_count < (EVAR_MAX_TASKS));
+        _evar_active_task_count += 1;
 
         // the task is removed from the available list and becomes detached
 
@@ -362,11 +377,12 @@ evar_task_id_t evar__create_task(evar_task_t* p_task, evar_task_data_t* p_task_d
 
         // fill in the task structures with the default values
 
+        P_TASK(task) = &_null_task; // prevent optimizer from optimizing away the following indirect call
         P_TASK(task) = p_task;
 
         p_task_info = P_TASK_INFO(task);
         p_task_info->current_task    = task;
-        p_task_info->parent_task     = evar_current_task;
+        p_task_info->parent_task     = _evar_current_task;
         p_task_info->p_task_data     = p_task_data; // with the call to initialize it is to be interpreted as initialization parameter
         p_task_info->p_message_store = NULL;
 
@@ -376,19 +392,18 @@ evar_task_id_t evar__create_task(evar_task_t* p_task, evar_task_data_t* p_task_d
         // since the task id could have been reused, we must clear the related shared structures
         // otherwise the new task would have inherited:
 
-        evar_task_quanta[task] = 0; // (1) the charged quanta (not terribly important)
+        _evar_task_quanta[task] = 0;                 // (1) the charged quanta (not terribly important)
 
-        evar_device__disable_interrupts();     // (2) the fact that the previous task had received async messages,
-        remove_task_from_received_async(task); // this is crucial, because the new task might not even be expecting
-        evar_device__enable_interrupts();      // any messages at all
+        evar_device__disable_interrupts();           // (2) the fact that the previous task had received async messages,
+        remove_task_from_received_async_queue(task); // this is crucial, because the new task might not even be expecting
+        evar_device__enable_interrupts();            // any messages at all
 
         // the task's initialize method is about to be called, and to be able
         // to use evar_task__... functions in it, we pretend for the moment
         // that the task being initialized is currently running
 
-        prev_current_task = evar_current_task;
-        evar_current_task = task;
-        evar_assert(DETACHED(evar_current_task));
+        prev_current_task = _evar_current_task;
+        _evar_current_task = task;
 
         // in its initialize function the task allocates memory,
         // initializes its state structures and initializes hardware
@@ -407,18 +422,46 @@ evar_task_id_t evar__create_task(evar_task_t* p_task, evar_task_data_t* p_task_d
 
         // restore the actual currently running task
 
-        evar_current_task = prev_current_task;
+        _evar_current_task = prev_current_task;
 
-        if (LIST(task) == AVAILABLE) {
+        if (LIST(task) == AVAILABLE_LIST) {
             return EVAR_INVALID_TASK_ID; // the task exited after initialization
         }
 
     }
-    else { // the other reason for this call to fail is that we may have run out of tasks
-        evar_assert(evar_active_tasks == (EVAR_MAX_TASKS));
+    else { // the other reason for this call to fail is that we have run out of tasks
+        evar_assert(_evar_active_task_count == (EVAR_MAX_TASKS));
     }
 
     return task;
+}
+
+/*
+ * Initializes a task message store in place.
+ */
+evar_message_store_t* _evar__initialize_message_store(
+    void* p_message_store,
+    evar_message_count_t capacity,
+    evar_message_size_t message_size
+) {
+
+    _evar_message_store_t* _p_message_store;
+    unsigned long message_buffer_size;
+
+    _p_message_store = (_evar_message_store_t*)p_message_store;
+    message_buffer_size = capacity * message_size;
+
+    _p_message_store->capacity            = capacity;
+    _p_message_store->message_size        = message_size;
+    _p_message_store->p_message_buffer    = (unsigned char*)p_message_store + EVAR_MESSAGE_STORE_SIZE;
+    _p_message_store->message_buffer_size = message_buffer_size;
+    _p_message_store->count               = 0;
+    _p_message_store->head                = 0;
+    _p_message_store->tail                = 0;
+
+    memset(_p_message_store->p_message_buffer, 0, (size_t)message_buffer_size);
+
+    return (evar_message_store_t*)p_message_store;
 }
 
 /*
@@ -432,51 +475,59 @@ evar_mq_result_t evar__send_message(
     evar_message_size_t message_size
 ) {
 
-    evar_message_queue_t* p_message_queue;
-    evar_mq_args_t push_args;
-    evar_mq_result_t mq_result;
-
-    evar_device__sending_pin_on();
-
-    // receiver is used only to locate the queue, after that it becomes implicit
+    _evar_message_store_t* p_message_store;
 
     evar_assert(VALID(receiver));
     evar_assert(DETACHED(receiver) || ACTIVE(receiver));
 
-    evar_assert(p_message != NULL);
+    evar_device__sending_pin_on();
 
-    p_message_queue = P_MESSAGE_QUEUE(receiver);
-    if (p_message_queue == NULL) {
+    p_message_store = P_MESSAGE_STORE(receiver);
+    if (p_message_store == NULL) {
         evar_device__sending_pin_off();
         return EVAR_MQ_INVALID_QUEUE;
     }
 
-    push_args.p_message_store = P_MESSAGE_STORE(receiver);
-    push_args.p_message       = p_message;
-    push_args.message_size    = message_size;
+    if ((p_message == NULL) || (p_message_store->message_size != message_size)) {
+        return EVAR_MQ_INVALID_PARAMETER;
+    }
 
     evar_device__disable_interrupts();
-    mq_result = p_message_queue->push(&push_args);
+
+    if (p_message_store->count == p_message_store->capacity) {
+        evar_device__disable_interrupts();
+        evar_device__sending_pin_off();
+        return EVAR_MQ_QUEUE_FULL;
+    }
+
+    memcpy(p_message_store->p_message_buffer + p_message_store->tail, p_message, p_message_store->message_size);
+
+    p_message_store->tail += p_message_store->message_size;
+    if (p_message_store->tail == p_message_store->message_buffer_size) {
+        p_message_store->tail = 0;
+    }
+
+    p_message_store->count += 1;
+
     evar_device__enable_interrupts();
 
     // since this call is made from a task, we have freedom
     // to manipulate task lists, and we move the receiver
-    // to the received list
+    // to the received list directly
 
-    if (mq_result == EVAR_MQ_SUCCESS) {
-        if (!DETACHED(receiver)) {
-            if (LIST(receiver) != RECEIVED) {
-                remove_task(receiver);
-                append_task(receiver, RECEIVED);
-            }
+    if (!DETACHED(receiver)) {
+        if (LIST(receiver) != RECEIVED_LIST) {
+            remove_task(receiver);
+            append_task(receiver, RECEIVED_LIST);
         }
-        else { // an odd case when a task is sending a message to itself
-            evar_assert(receiver == evar_current_task);
-        }
+    }
+    else { // an odd case when a task is sending a message to itself
+        evar_assert(receiver == _evar_current_task);
     }
 
     evar_device__sending_pin_off();
-    return mq_result;
+
+    return EVAR_MQ_SUCCESS;
 }
 
 /*
@@ -486,6 +537,10 @@ evar_mq_result_t evar__send_message(
  * This can be executed with or without interrupts disabled. Interrupts
  * will be disabled for the push operation, and the previous state of
  * interrupts will be restored at exit.
+ * Note that this is a possible cause of re-entering, if another interrupt
+ * happens after execution of this function starts, and another handler
+ * also needs to send a message. If re-entrancy is a problem, such as
+ * compiled stack, interrupts must be disabled before calling this.
  */
 evar_mq_result_t evar__send_async_message(
     evar_task_id_t receiver,
@@ -493,37 +548,27 @@ evar_mq_result_t evar__send_async_message(
     evar_message_size_t message_size
 ) {
 
-    evar_message_queue_t* p_message_queue;
-    evar_mq_args_t push_args;
+    _evar_message_store_t* p_message_store;
     evar_interrupts_enabled_t interrupts_enabled;
-    evar_mq_result_t mq_result;
-
-    evar_device__sending_pin_on();
-
-    // receiver is used only to locate the queue, after that it becomes implicit
 
     evar_assert(VALID(receiver));
     evar_assert(DETACHED(receiver) || ACTIVE(receiver));
 
-    evar_assert(p_message != NULL);
+    evar_device__sending_pin_on();
 
-    // from this moment we are using tasks shared state without disabling interrupts,
-    // they are only disabled for the duration of pushing the message to the queue
-
-    // this shared state does not change after the receiving task has been initialized,
-    // the only race condition there is here, is when the receiving task exits, and at
-    // that moment it receives an asynchronous message, therefore you should only make
-    // interrupt handlers send messages to tasks that are running forever
-
-    p_message_queue = P_MESSAGE_QUEUE(receiver);
-    if (p_message_queue == NULL) {
+    p_message_store = P_MESSAGE_STORE(receiver);
+    if (p_message_store == NULL) {
         evar_device__sending_pin_off();
         return EVAR_MQ_INVALID_QUEUE;
     }
 
-    push_args.p_message_store = P_MESSAGE_STORE(receiver);
-    push_args.p_message       = p_message;
-    push_args.message_size    = message_size;
+    if ((p_message == NULL) || (p_message_store->message_size != message_size)) {
+        evar_device__sending_pin_off();
+        return EVAR_MQ_INVALID_PARAMETER;
+    }
+
+    // the interrupts are handled differently for the asynchronous sending,
+    // the caller may be executing with the interrupts enabled or not
 
 #ifdef evar_device__save_and_disable_interrupts
     evar_device__save_and_disable_interrupts(interrupts_enabled);
@@ -531,30 +576,44 @@ evar_mq_result_t evar__send_async_message(
     evar_device__save_and_disable_interrupts(&interrupts_enabled);
 #endif
 
-    mq_result = p_message_queue->push(&push_args);
-
-    if (mq_result == EVAR_MQ_SUCCESS) {
-
-        // register the fact that the task has received an asynchronous message
-        // in a dedicated interlocked mini queue, the scheduler will react upon
-        // it at its next pass
-
-        register_task_as_received_async(receiver);
-
-        // because this is executed asynchronously to the scheduler, there is a chance
-        // that this happens when the scheduler has put the CPU to sleep by a call to
-        // evar_device__cpu_idle
-
-        // for a regular interrupt-driven single-core MCU, that this code is even executing
-        // would mean that the interrupt had happened, and its handler has called this function,
-        // therefore the CPU was already awaken and is running normally, nothing is to be done
-
-        // if, on the other hand, we are running in a multi-threaded multi-core environment,
-        // where interrupts are ether simulated (e.g. Windows implementation) or behave
-        // differently, we need to kick the sleeping scheduler by the following call
-
-        evar_device__wake_cpu();
+    if (p_message_store->count == p_message_store->capacity) {
+#ifdef evar_device__restore_interrupts
+        evar_device__restore_interrupts(interrupts_enabled);
+#else
+        evar_device__restore_interrupts(&interrupts_enabled);
+#endif
+        evar_device__sending_pin_off();
+        return EVAR_MQ_QUEUE_FULL;
     }
+
+    memcpy(p_message_store->p_message_buffer + p_message_store->tail, p_message, p_message_store->message_size);
+
+    p_message_store->tail += p_message_store->message_size;
+    if (p_message_store->tail == p_message_store->message_buffer_size) {
+        p_message_store->tail = 0;
+    }
+
+    p_message_store->count += 1;
+
+    // register the fact that the task has received an asynchronous message
+    // in a dedicated interlocked mini queue, the scheduler will react upon
+    // it at its next pass
+
+    put_task_to_received_async_queue(receiver);
+
+    // because this is executed asynchronously to the scheduler, there is a chance
+    // that this happens when the scheduler has put the CPU to sleep by a call to
+    // evar_device__cpu_idle
+
+    // for a regular interrupt-driven single-core MCU, that this code is even executing
+    // would mean that the interrupt had happened, and its handler has called this function,
+    // therefore the CPU was already awaken and is running normally, nothing is to be done
+
+    // if, on the other hand, we are running in a multi-threaded multi-core environment,
+    // where interrupts are either simulated (e.g. Windows implementation) or behave
+    // differently, we need to kick the sleeping scheduler by the following call
+
+    evar_device__wake_cpu();
 
 #ifdef evar_device__restore_interrupts
     evar_device__restore_interrupts(interrupts_enabled);
@@ -563,91 +622,115 @@ evar_mq_result_t evar__send_async_message(
 #endif
 
     evar_device__sending_pin_off();
-    return mq_result;
+
+    return EVAR_MQ_SUCCESS;
 }
 
 /*
- * Receives the first message from the current task's queue. The received message is removed from the queue.
+ * Returns the first message from the current task's queue. The received message is removed from the queue.
  */
-evar_mq_result_t evar__receive_message(
+evar_mq_result_t _evar__receive_message(
     void* p_message,
     evar_message_size_t message_size
 ) {
 
-    evar_message_queue_t* p_message_queue;
-    evar_mq_args_t pop_args;
-    evar_mq_result_t mq_result;
+    _evar_message_store_t* p_message_store;
+
+    evar_assert(VALID(_evar_current_task));
+    evar_assert(DETACHED(_evar_current_task));
 
     evar_device__receiving_pin_on();
 
-    evar_assert(VALID(evar_current_task));
-    evar_assert(DETACHED(evar_current_task));
-
-    p_message_queue = P_MESSAGE_QUEUE(evar_current_task);
-    if (p_message_queue == NULL) {
+    p_message_store = P_MESSAGE_STORE(_evar_current_task);
+    if (p_message_store == NULL) {
         evar_device__receiving_pin_off();
         return EVAR_MQ_INVALID_QUEUE;
     }
 
-    pop_args.p_message_store = P_MESSAGE_STORE(evar_current_task);
-    pop_args.p_message       = p_message;
-    pop_args.message_size    = message_size;
+    if ((p_message == NULL) || (p_message_store->message_size != message_size)) {
+        evar_device__receiving_pin_off();
+        return EVAR_MQ_INVALID_PARAMETER;
+    }
 
     evar_device__disable_interrupts();
-    mq_result = p_message_queue->pop(&pop_args);
+
+    if (p_message_store->count == 0) {
+        evar_device__enable_interrupts();
+        evar_device__receiving_pin_off();
+        return EVAR_MQ_QUEUE_EMPTY;
+    }
+
+    memcpy(p_message, p_message_store->p_message_buffer + p_message_store->head, message_size);
+
+    p_message_store->head += p_message_store->message_size;
+    if (p_message_store->head == p_message_store->message_buffer_size) {
+        p_message_store->head = 0;
+    }
+
+    p_message_store->count -= 1;
+
     evar_device__enable_interrupts();
 
     evar_device__receiving_pin_off();
-    return mq_result;
+
+    return EVAR_MQ_SUCCESS;
 }
 
 /*
  * Returns a copy of the first message for the current task, but does not remove it from the queue.
  */
-evar_mq_result_t evar__preview_message(
+evar_mq_result_t _evar__preview_message(
     void* p_message,
     evar_message_size_t message_size
 ) {
 
-    evar_message_queue_t* p_message_queue;
-    evar_mq_args_t peek_args;
-    evar_mq_result_t mq_result;
+    _evar_message_store_t* p_message_store;
+
+    evar_assert(VALID(_evar_current_task));
+    evar_assert(DETACHED(_evar_current_task));
 
     evar_device__receiving_pin_on();
 
-    evar_assert(VALID(evar_current_task));
-    evar_assert(DETACHED(evar_current_task));
-
-    p_message_queue = P_MESSAGE_QUEUE(evar_current_task);
-    if (p_message_queue == NULL) {
+    p_message_store = P_MESSAGE_STORE(_evar_current_task);
+    if (p_message_store == NULL) {
         evar_device__receiving_pin_off();
         return EVAR_MQ_INVALID_QUEUE;
     }
 
-    peek_args.p_message_store = P_MESSAGE_STORE(evar_current_task);
-    peek_args.p_message       = p_message;
-    peek_args.message_size    = message_size;
+    if ((p_message == NULL) || (p_message_store->message_size != message_size)) {
+        evar_device__receiving_pin_off();
+        return EVAR_MQ_INVALID_PARAMETER;
+    }
 
     evar_device__disable_interrupts();
-    mq_result = p_message_queue->peek(&peek_args);
+
+    if (p_message_store->count == 0) {
+        evar_device__enable_interrupts();
+        evar_device__receiving_pin_off();
+        return EVAR_MQ_QUEUE_EMPTY;
+    }
+
+    memcpy(p_message, p_message_store->p_message_buffer + p_message_store->head, message_size);
+
     evar_device__enable_interrupts();
 
     evar_device__receiving_pin_off();
-    return mq_result;
+
+    return EVAR_MQ_SUCCESS;
 }
 
 /*
- * Advances the base timestamp when the internal clock is about to be truncated.
+ * Advances the base timestamp when the clock is about to be truncated.
  */
-static void advance_base_timestamp(evar_clock_ticks_t advanced_ticks) {
+static void advance_base_timestamp(_evar_clock_ticks_t ticks_to_advance) {
 
-    unsigned long advanced_usec;
+    unsigned long usec_to_advance;
 
-    advanced_usec = EVAR_TICKS_TO_USEC(advanced_ticks);
+    usec_to_advance = EVAR_TICKS_TO_USEC(ticks_to_advance);
 
-    evar_base_timestamp.low += advanced_usec;
-    if (evar_base_timestamp.low < advanced_usec) {
-        evar_base_timestamp.high += 1;
+    _evar_base_timestamp.low += usec_to_advance;
+    if (_evar_base_timestamp.low < usec_to_advance) {
+        _evar_base_timestamp.high += 1;
     }
 }
 
@@ -657,16 +740,24 @@ static void advance_base_timestamp(evar_clock_ticks_t advanced_ticks) {
 static void update_current_timestamp(void) {
 
     unsigned long clock_usec;
-    _evar_timestamp_t* p_current_timestamp;
 
-    clock_usec = EVAR_TICKS_TO_USEC(evar_clock_ticks);
-    p_current_timestamp = (_evar_timestamp_t*)&evar_current_timestamp;
+    clock_usec = EVAR_TICKS_TO_USEC(_evar_clock_ticks);
 
-    *p_current_timestamp = evar_base_timestamp;
-    p_current_timestamp->low += clock_usec;
-    if (p_current_timestamp->low < clock_usec) {
-        p_current_timestamp->high += 1;
+    _evar_current_timestamp = _evar_base_timestamp;
+
+    _evar_current_timestamp.low += clock_usec;
+    if (_evar_current_timestamp.low < clock_usec) {
+        _evar_current_timestamp.high += 1;
     }
+}
+
+/*
+ * Returns the current absolute timestamp in microseconds. The returned
+ * value is opaque and is only useful with evar__get_time_delta below.
+ */
+void evar__get_current_timestamp(evar_timestamp_t* p_timestamp) {
+
+    memcpy(p_timestamp, &_evar_current_timestamp, sizeof(evar_timestamp_t));
 }
 
 /*
@@ -696,7 +787,7 @@ evar_time_delta_t evar__get_time_delta(evar_timestamp_t* p_timestamp1, evar_time
 
         diff = (0xFFFFFFFF - p_ts1->low) + p_ts2->low + 1;
         if ((diff & 0x80000000) == 0) {
-            return diff;
+            return (evar_time_delta_t)diff;
         }
         else {
             return EVAR_MAX_POSITIVE_TIME_DELTA;
@@ -713,7 +804,7 @@ evar_time_delta_t evar__get_time_delta(evar_timestamp_t* p_timestamp1, evar_time
 
         diff = (0xFFFFFFFF - p_ts2->low) + p_ts1->low + 1;
         if ((diff & 0x80000000) == 0) {
-            return -diff;
+            return (evar_time_delta_t)-diff;
         }
         else {
             return EVAR_MAX_NEGATIVE_TIME_DELTA;
@@ -723,7 +814,7 @@ evar_time_delta_t evar__get_time_delta(evar_timestamp_t* p_timestamp1, evar_time
 
         diff = p_ts2->low - p_ts1->low;
         if ((diff & 0x80000000) == 0) {
-            return diff;
+            return (evar_time_delta_t)diff;
         }
         else {
             return EVAR_MAX_POSITIVE_TIME_DELTA;
@@ -733,7 +824,7 @@ evar_time_delta_t evar__get_time_delta(evar_timestamp_t* p_timestamp1, evar_time
 
         diff = p_ts1->low - p_ts2->low;
         if ((diff & 0x80000000) == 0) {
-            return -diff;
+            return (evar_time_delta_t)-diff;
         }
         else {
             return EVAR_MAX_NEGATIVE_TIME_DELTA;
@@ -745,47 +836,27 @@ evar_time_delta_t evar__get_time_delta(evar_timestamp_t* p_timestamp1, evar_time
 }
 
 /*
- * Returns id of a given active task, the first instance of it,
- * if there are multiple instances of the same task.
- */
-evar_task_id_t evar__get_task_id(evar_task_t* p_task) {
-
-    evar_task_id_t task;
-
-    for (task = 0; task < (EVAR_MAX_TASKS); ++task) {
-        if (ACTIVE(task) && P_TASK(task) == p_task) {
-            return task;
-        }
-    }
-
-    return EVAR_INVALID_TASK_ID;
-}
-
-/*
  * Returns 1 if the task's message queue has messages in it,
  * 0 if the queue is empty, or is missing altogether.
  */
 static unsigned char task_has_messages(evar_task_id_t task) {
 
-    evar_message_queue_t* p_message_queue;
-    evar_mq_args_t peek_args;
-    evar_mq_result_t mq_result;
+    _evar_message_store_t* p_message_store;
 
-    p_message_queue = P_MESSAGE_QUEUE(task);
-    if (p_message_queue == NULL) {
+    p_message_store = P_MESSAGE_STORE(task);
+    if (p_message_store == NULL) {
         return 0;
     }
 
-    peek_args.p_message_store = P_MESSAGE_STORE(task);
-    peek_args.p_message = NULL;
-    peek_args.message_size = 0;
-
     evar_device__disable_interrupts();
-    mq_result = p_message_queue->peek(&peek_args);
-    evar_device__enable_interrupts();
-
-    evar_assert(mq_result == EVAR_MQ_SUCCESS || mq_result == EVAR_MQ_QUEUE_EMPTY);
-    return mq_result == EVAR_MQ_SUCCESS ? 1 : 0;
+    if (p_message_store->count > 0) {
+        evar_device__enable_interrupts();
+        return 1;
+    }
+    else {
+        evar_device__enable_interrupts();
+        return 0;
+    }
 }
 
 /*
@@ -796,20 +867,20 @@ static unsigned char task_has_messages(evar_task_id_t task) {
  */
 void evar_task__exit(void) {
 
-    evar_assert(VALID(evar_current_task));
-    evar_assert(DETACHED(evar_current_task));
+    evar_assert(VALID(_evar_current_task));
+    evar_assert(DETACHED(_evar_current_task));
 
     // this catches the situation when a task has not been properly initialized and
     // is being put back to the available list, there is no need to call the cleanup
 
-    if (LIST(evar_current_task) != AVAILABLE) {
-        P_TASK(evar_current_task)->cleanup(P_TASK_INFO(evar_current_task));
+    if (LIST(_evar_current_task) != AVAILABLE_LIST) {
+        P_TASK(_evar_current_task)->cleanup(P_TASK_INFO(_evar_current_task));
     }
 
-    append_task(evar_current_task, AVAILABLE);
+    append_task(_evar_current_task, AVAILABLE_LIST);
 
-    evar_assert(evar_active_tasks > 0);
-    evar_active_tasks -= 1;
+    evar_assert(_evar_active_task_count > 0);
+    _evar_active_task_count -= 1;
 }
 
 /*
@@ -820,10 +891,10 @@ void evar_task__exit(void) {
  */
 void evar_task__keep_running(void) {
 
-    evar_assert(VALID(evar_current_task));
-    evar_assert(DETACHED(evar_current_task));
+    evar_assert(VALID(_evar_current_task));
+    evar_assert(DETACHED(_evar_current_task));
 
-    append_task(evar_current_task, task_has_messages(evar_current_task) ? RECEIVED : RUNNING);
+    append_task(_evar_current_task, task_has_messages(_evar_current_task) ? RECEIVED_LIST : RUNNING_LIST);
 }
 
 /*
@@ -835,12 +906,12 @@ void evar_task__keep_running(void) {
  */
 void evar_task__sleep(void) {
 
-    evar_assert(VALID(evar_current_task));
-    evar_assert(DETACHED(evar_current_task));
+    evar_assert(VALID(_evar_current_task));
+    evar_assert(DETACHED(_evar_current_task));
 
-    WAKE_UP_AT(evar_current_task) = EVAR_INVALID_CLOCK_TICKS;
+    WAKE_UP_AT(_evar_current_task) = EVAR_INVALID_CLOCK_TICKS;
 
-    append_task(evar_current_task, task_has_messages(evar_current_task) ? RECEIVED : SLEEPING);
+    append_task(_evar_current_task, task_has_messages(_evar_current_task) ? RECEIVED_LIST : SLEEPING_LIST);
 }
 
 /*
@@ -849,45 +920,45 @@ void evar_task__sleep(void) {
  * The task will be put on either sleeping list, or received list,
  * if there already are currently messages in its queue.
  */
-static void task_sleep_until(evar_clock_ticks_t wake_up_at) {
+static void task_sleep_until(_evar_clock_ticks_t wake_up_at) {
 
     evar_task_id_t sleeping_head;
     evar_task_id_t sleeping_task;
 
     evar_assert(wake_up_at != EVAR_INVALID_CLOCK_TICKS);
 
-    evar_assert(VALID(evar_current_task));
-    evar_assert(DETACHED(evar_current_task));
+    evar_assert(VALID(_evar_current_task));
+    evar_assert(DETACHED(_evar_current_task));
 
-    WAKE_UP_AT(evar_current_task) = wake_up_at;
+    WAKE_UP_AT(_evar_current_task) = wake_up_at;
 
     // if the task has a message queue and there are messages in it,
     // the task will get onto the received list and wake up immediately
 
-    if (task_has_messages(evar_current_task)) {
-        append_task(evar_current_task, RECEIVED);
+    if (task_has_messages(_evar_current_task)) {
+        append_task(_evar_current_task, RECEIVED_LIST);
         return;
     }
 
     // otherwise we insert it in its proper place in the list of sleeping tasks
 
-    sleeping_head = HEAD(SLEEPING);
+    sleeping_head = HEAD(SLEEPING_LIST);
     if (!VALID(sleeping_head)) {
-        append_task(evar_current_task, SLEEPING);
+        append_task(_evar_current_task, SLEEPING_LIST);
         return;
     }
 
     sleeping_task = sleeping_head;
     do {
         if (wake_up_at < WAKE_UP_AT(sleeping_task)) {
-            insert_task(evar_current_task, sleeping_task);
+            insert_task(_evar_current_task, sleeping_task);
             return;
         }
         sleeping_task = NEXT(sleeping_task);
     }
     while (sleeping_task != sleeping_head);
 
-    append_task(evar_current_task, SLEEPING);
+    append_task(_evar_current_task, SLEEPING_LIST);
 }
 
 /*
@@ -896,10 +967,10 @@ static void task_sleep_until(evar_clock_ticks_t wake_up_at) {
  */
 void evar_task__sleep_for(evar_interval_t usec) {
 
-    evar_assert(VALID(evar_current_task));
-    evar_assert(DETACHED(evar_current_task));
+    evar_assert(VALID(_evar_current_task));
+    evar_assert(DETACHED(_evar_current_task));
 
-    task_sleep_until(evar_clock_ticks + EVAR_USEC_TO_TICKS(usec));
+    task_sleep_until(_evar_clock_ticks + EVAR_USEC_TO_TICKS(usec));
 }
 
 /*
@@ -912,22 +983,22 @@ void evar_task__sleep_for(evar_interval_t usec) {
  */
 void evar_task__sleep_next(evar_interval_t usec) {
 
-    evar_clock_ticks_t next_up_at;
+    _evar_clock_ticks_t next_up_at;
 
-    evar_assert(VALID(evar_current_task));
-    evar_assert(DETACHED(evar_current_task));
+    evar_assert(VALID(_evar_current_task));
+    evar_assert(DETACHED(_evar_current_task));
 
-    next_up_at = NEXT_UP_AT(evar_current_task);
+    next_up_at = NEXT_UP_AT(_evar_current_task);
 
     if (next_up_at == EVAR_INVALID_CLOCK_TICKS) { // the first time the task calls this function
-        NEXT_UP_AT(evar_current_task) = evar_clock_ticks + EVAR_USEC_TO_TICKS(usec);
+        NEXT_UP_AT(_evar_current_task) = _evar_clock_ticks + EVAR_USEC_TO_TICKS(usec);
     }
-    else if (next_up_at <= evar_clock_ticks) { // the interval has ended
-        NEXT_UP_AT(evar_current_task) = next_up_at + EVAR_USEC_TO_TICKS(usec);
+    else if (next_up_at <= _evar_clock_ticks) { // the interval has ended
+        NEXT_UP_AT(_evar_current_task) = next_up_at + EVAR_USEC_TO_TICKS(usec);
     }
     // else we are within the previous interval and are still waiting for it to end
 
-    task_sleep_until(NEXT_UP_AT(evar_current_task));
+    task_sleep_until(NEXT_UP_AT(_evar_current_task));
 }
 
 /*
@@ -950,8 +1021,6 @@ static evar_task_id_t pick_task_to_execute(void) {
     // the tasks on different lists have different priorities, accounted in the form of quanta,
     // charged to each task every time it is picked for execution off this or that list
 
-#define PICK_TASK(task, quanta) ((evar_task_quanta[task] + quanta <= EVAR_QUANTA_PER_ROUND) ? (evar_task_quanta[task] += quanta) : 0)
-
     // this will make at most two passes, first with the current quanta values,
     // and if no task could be picked, the quanta will be zeroed and we try again
 
@@ -964,7 +1033,19 @@ static evar_task_id_t pick_task_to_execute(void) {
         // put on the received list by flush_received_async but
         // have no actual messages in the queue when it is awakened
 
-        received_head = HEAD(RECEIVED);
+        received_head = HEAD(RECEIVED_LIST);
+
+/*
+ * The following defines allow for priority tuning, e.g. if a task keeps receiving messages,
+ * it will be allowed to execute four times before a task running in background will finally
+ * supersede it. This is not exposed on a higher level, since there is no measure of effect.
+ */
+#define EVAR_QUANTA_PER_ROUND (4)
+#define EVAR_RECEIVED_QUANTA  (1)
+#define EVAR_SLEEPING_QUANTA  (2)
+#define EVAR_RUNNING_QUANTA   (4)
+
+#define PICK_TASK(task, quanta) ((_evar_task_quanta[task] + quanta <= EVAR_QUANTA_PER_ROUND) ? (_evar_task_quanta[task] += quanta) : 0)
 
         if (VALID(received_head)) {
             received_task = received_head;
@@ -980,11 +1061,11 @@ static evar_task_id_t pick_task_to_execute(void) {
 
         // the next priority goes to sleeping tasks ready to wake up
 
-        sleeping_head = HEAD(SLEEPING);
+        sleeping_head = HEAD(SLEEPING_LIST);
         if (VALID(sleeping_head)) {
             sleeping_task = sleeping_head;
             do {
-                if (WAKE_UP_AT(sleeping_task) > evar_clock_ticks) {
+                if (WAKE_UP_AT(sleeping_task) > _evar_clock_ticks) {
                     break;
                 }
                 if (PICK_TASK(sleeping_task, EVAR_SLEEPING_QUANTA)) {
@@ -998,7 +1079,7 @@ static evar_task_id_t pick_task_to_execute(void) {
 
         // finally, we pick a running task
 
-        running_head = HEAD(RUNNING);
+        running_head = HEAD(RUNNING_LIST);
         if (VALID(running_head)) {
             running_task = running_head;
             do {
@@ -1013,10 +1094,8 @@ static evar_task_id_t pick_task_to_execute(void) {
 
         // if we did not find a task to execute, clear the charged quanta and make another pass
 
-        memset(evar_task_quanta, 0, sizeof(evar_task_quanta));
+        memset(_evar_task_quanta, 0, sizeof(_evar_task_quanta));
     }
-
-#undef PICK_TASK
 
     return EVAR_INVALID_TASK_ID;
 }
@@ -1024,12 +1103,12 @@ static evar_task_id_t pick_task_to_execute(void) {
 /*
  * Goes through the tasks on a given list and subtracts truncated ticks from their time-related fields.
  */
-static void truncate_task_list_clocks(task_list_t task_list, evar_clock_ticks_t truncated_ticks) {
+static void truncate_task_list_clocks(_evar_task_list_t task_list, _evar_clock_ticks_t truncated_ticks) {
 
     evar_task_id_t head;
     evar_task_id_t task;
-    evar_clock_ticks_t wake_up_at;
-    evar_clock_ticks_t next_up_at;
+    _evar_clock_ticks_t wake_up_at;
+    _evar_clock_ticks_t next_up_at;
 
     head = HEAD(task_list);
     if (VALID(head)) {
@@ -1054,7 +1133,7 @@ static void truncate_task_list_clocks(task_list_t task_list, evar_clock_ticks_t 
             // a task is supposed to wake up, but it is only relevant for tasks
             // that are currently on sleeping list
 
-            if (task_list == SLEEPING) {
+            if (task_list == SLEEPING_LIST) {
                 wake_up_at = WAKE_UP_AT(task);
                 if (wake_up_at != EVAR_INVALID_CLOCK_TICKS) {
                     if (wake_up_at >= truncated_ticks) {
@@ -1075,10 +1154,10 @@ static void truncate_task_list_clocks(task_list_t task_list, evar_clock_ticks_t 
  * Goes through the all active lists of tasks and subtracts
  * truncated ticks from their clock fields.
  */
-static void truncate_stored_clocks(evar_clock_ticks_t truncated_ticks) {
-    truncate_task_list_clocks(RUNNING,  truncated_ticks);
-    truncate_task_list_clocks(SLEEPING, truncated_ticks);
-    truncate_task_list_clocks(RECEIVED, truncated_ticks);
+static void truncate_stored_clocks(_evar_clock_ticks_t truncated_ticks) {
+    truncate_task_list_clocks(RUNNING_LIST,  truncated_ticks);
+    truncate_task_list_clocks(SLEEPING_LIST, truncated_ticks);
+    truncate_task_list_clocks(RECEIVED_LIST, truncated_ticks);
 }
 
 /*
@@ -1090,41 +1169,46 @@ static void truncate_stored_clocks(evar_clock_ticks_t truncated_ticks) {
  * to absolute moments in time that we have stored are corrected,
  * the global timestamp is updated and the internal clock is reset.
  */
-static void update_internal_clock(evar_timer_ticks_t timer_ticks) {
+static void update_internal_clock(unsigned short timer_ticks) {
 
-    evar_timer_ticks_t ticks_elapsed;
+    unsigned short ticks_elapsed;
 
     // get ticks elapsed since the last call to this function
 
-    if (evar_prev_timer_ticks <= timer_ticks) {
-        ticks_elapsed = timer_ticks - evar_prev_timer_ticks;
+    if (_evar_prev_timer_ticks <= timer_ticks) {
+        ticks_elapsed = timer_ticks - _evar_prev_timer_ticks;
     }
     else { // timer tick counter rolled over and passed zero
-        ticks_elapsed = ((evar_timer_ticks_t)-1) - (evar_prev_timer_ticks - timer_ticks - 1);
+        ticks_elapsed = USHRT_MAX - (_evar_prev_timer_ticks - timer_ticks - 1);
     }
-    evar_prev_timer_ticks = timer_ticks;
+    _evar_prev_timer_ticks = timer_ticks;
 
-    if (EVAR_MAX_CLOCK_TICKS - evar_clock_ticks <= ticks_elapsed) { // we have reached the end of the internal clock range
-        truncate_stored_clocks(evar_clock_ticks);
-        advance_base_timestamp(evar_clock_ticks);
-        evar_clock_ticks = 0;
+    if (EVAR_MAX_CLOCK_TICKS - _evar_clock_ticks <= ticks_elapsed) { // we have reached the end of the internal clock range
+        truncate_stored_clocks(_evar_clock_ticks);
+        advance_base_timestamp(_evar_clock_ticks);
+        _evar_clock_ticks = 0;
     }
 
-    evar_clock_ticks += ticks_elapsed;
-    evar_assert(evar_clock_ticks < EVAR_MAX_CLOCK_TICKS);
+    _evar_clock_ticks += ticks_elapsed;
+    evar_assert(_evar_clock_ticks < EVAR_MAX_CLOCK_TICKS);
 
     update_current_timestamp();
 }
 
 /*
- * A single pass of the scheduler, picking and running one task and then returning.
+ * A single pass of the scheduler, picking and running one task
+ * and then returning one of the EVAR_LOOP_...
  */
-static evar_loop_result_t schedule_task(evar_timer_ticks_t timer_ticks) {
+static unsigned char schedule_task(unsigned short timer_ticks) {
+
+#define EVAR_LOOP_HALTED (0)
+#define EVAR_LOOP_ACTIVE (1)
+#define EVAR_LOOP_IDLE   (2)
 
     evar_task_t* p_task;
     evar_task_info_t* p_task_info;
 
-    if (evar_active_tasks == 0) {
+    if (_evar_active_task_count == 0) {
         return EVAR_LOOP_HALTED;
     }
 
@@ -1137,19 +1221,19 @@ static evar_loop_result_t schedule_task(evar_timer_ticks_t timer_ticks) {
     // move the tasks that have received asynchronous messages to the received list
 
     evar_device__disable_interrupts();
-    flush_received_async();
+    flush_received_async_queue();
     evar_device__enable_interrupts();
 
     // here the decision is made which task to execute next
 
-    evar_current_task = pick_task_to_execute();
-    if (!VALID(evar_current_task)) {
+    _evar_current_task = pick_task_to_execute();
+    if (!VALID(_evar_current_task)) {
         return EVAR_LOOP_IDLE;
     }
-    evar_assert(DETACHED(evar_current_task));
+    evar_assert(DETACHED(_evar_current_task));
 
-    p_task = P_TASK(evar_current_task);
-    p_task_info = P_TASK_INFO(evar_current_task);
+    p_task = P_TASK(_evar_current_task);
+    p_task_info = P_TASK_INFO(_evar_current_task);
 
     // the task has been detached from the list it was picked from,
     // but the reference to that list still remains and is used
@@ -1157,18 +1241,17 @@ static evar_loop_result_t schedule_task(evar_timer_ticks_t timer_ticks) {
 
     evar_device__running_pin_on();
 
-    switch (LIST(evar_current_task)) {
-        case RECEIVED:
+    switch (LIST(_evar_current_task)) {
+        case RECEIVED_LIST:
             p_task->receive(p_task_info);
             break;
-        case SLEEPING:
+        case SLEEPING_LIST:
             p_task->wake_up(p_task_info);
             break;
-        case RUNNING:
+        case RUNNING_LIST:
             p_task->run(p_task_info);
             break;
         default: // should not happen
-            evar_assert(0);
             break;
     }
 
@@ -1178,9 +1261,9 @@ static evar_loop_result_t schedule_task(evar_timer_ticks_t timer_ticks) {
     // how it wishes to continue its execution, and each of those calls would
     // have put the task onto one list or another, and if at this moment
     // the task is still detached, means that it simply returned, we treat
-    // this as an indication that it needs to terminate
+    // this as an indication that it wants to terminate
 
-    if (DETACHED(evar_current_task)) {
+    if (DETACHED(_evar_current_task)) {
         evar_task__exit();
     }
 
@@ -1191,10 +1274,10 @@ static evar_loop_result_t schedule_task(evar_timer_ticks_t timer_ticks) {
  * The pair of functions evar__setup/evar__loop exist to support the Arduino-like environments
  * where the SDK provides the ticking time source and expects the setup/loop sequence.
  * Note that the device-specific function evar_device__get_timer_ticks must be implemented
- * to return the SDK's get_millis or something like it.
+ * to return the SDK's get_millis or something like that.
  */
 void evar__setup(evar_task_t* p_main_task, void* p_main_task_data) {
-    evar__initialize();
+    initialize();
     evar__create_task(p_main_task, p_main_task_data);
 }
 
@@ -1202,19 +1285,8 @@ void evar__setup(evar_task_t* p_main_task, void* p_main_task_data) {
  * What this implementation lacks compared to evar__run, where a hardware timer
  * is dedicated to maintaining the scheduler, is the ability to put the CPU to sleep.
  */
-evar_loop_result_t evar__loop(void) {
-    unsigned char loop_result;
-    loop_result = schedule_task(evar_device__get_timer_ticks());
-    switch (loop_result) {
-        case EVAR_LOOP_IDLE:
-            // this is where we could potentially put the CPU to sleep,
-            // but the outside environment would be surprised by that
-        case EVAR_LOOP_ACTIVE:
-            break;
-        default:
-            evar__halt();
-    }
-    return loop_result; // the caller still might do it from this result
+void evar__loop(void) {
+    schedule_task(evar_device__get_timer_ticks());
 }
 
 /*
@@ -1229,7 +1301,7 @@ void evar__run(evar_task_t* p_main_task, void* p_main_task_data) {
         switch (schedule_task(evar_device__get_timer_ticks())) {
             case EVAR_LOOP_IDLE:
                 evar_device__idle_pin_on();
-                evar_device__cpu_idle(); // put the CPU to sleep until the next interrupt
+                evar_device__cpu_idle(); // put the CPU to sleep until the next interrupt (possibly timer)
                 evar_device__idle_pin_off();
             case EVAR_LOOP_ACTIVE:
                 continue; // for

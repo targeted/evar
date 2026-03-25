@@ -7,14 +7,16 @@
 #define _EVAR_CONCAT(A, B) A ## B
 #define EVAR_CONCAT(A, B) _EVAR_CONCAT(A, B)
 
-// compile-time assert
-
+/*
+ * Compile-time assert.
+ */
 #define EVAR_ASSERT(cond, tag) \
     extern unsigned char EVAR_CONCAT(__EVAR_ASSERT__, tag)[1]; \
     extern unsigned char EVAR_CONCAT(__EVAR_ASSERT__, tag)[(cond) ? 1 : -1]
 
-// to silence "unused argument" warnings
-		
-#define EVAR_UNUSED(arg) *((volatile unsigned char*)(&arg))
-		
+/*
+ * To silence "unused argument" warnings.
+ */
+#define EVAR_UNUSED(arg) (void)arg
+
 #endif
