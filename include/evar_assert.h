@@ -8,6 +8,7 @@
  * For non-debug assertions, the tasks should use `if (!ok) evar__crash(...);`
  */
 #ifdef EVAR_DEBUG
+#include <evar_device.h>
 #define evar_assert(cond) if (!(cond)) evar_device__crash(0xffff, "assertion failed at " __FILE__ ":" EVAR_QUOTE(__LINE__))
 #else
 #define evar_assert(cond)
