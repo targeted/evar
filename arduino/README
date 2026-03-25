@@ -1,0 +1,5 @@
+Put this in Arduino libraries.
+
+Make sure you have the following in platform.txt:
+compiler.c.flags=... -I{build.source.path}
+so that project directory is considered a source for includes.
