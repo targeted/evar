@@ -85,18 +85,17 @@ typedef struct {
 } _evar_received_async_queue_t;
 
 /*
- * Abstract message store in a form of a fixed-size circular buffer.
+ * Abstract message store (header) in a form of a fixed-size circular buffer.
+ * The actual messages are implicitly stored after this header.
  */
 typedef struct {
-    evar_message_count_t capacity;            // maximum number of messages
-    evar_message_size_t  message_size;        // fixed size of each message
-    unsigned char*       p_message_buffer;    // opaque array of messages, to be re-cast for each task individually
-    unsigned long        message_buffer_size; // capacity multiplied by message_size, byte size of the buffer pointed by p_messages
-    evar_message_count_t count;               // current number of messages
-    unsigned long        head;                // offset to the first actual message in the array
-    unsigned long        tail;                // offset to the first empty slot in the array
+    evar_message_count_t count; // current number of messages
+    evar_message_size_t  head;  // offset to the first actual message in the following buffer
+    evar_message_size_t  tail;  // offset to the first empty slot in the following buffer
+    evar_message_size_t  size;  // size of the following buffer in bytes (message size x message count)
+    // this is where the message buffer starts
 } _evar_message_store_t;
 
-EVAR_ASSERT(sizeof(_evar_message_store_t) <= (EVAR_MESSAGE_STORE_SIZE), sizeof_evar_message_store_t);
+EVAR_ASSERT(sizeof(_evar_message_store_t) == (EVAR_MESSAGE_STORE_SIZE), sizeof_evar_message_store_t);
 
 #endif

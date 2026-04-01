@@ -348,6 +348,8 @@ static void null_task_method(evar_task_info_t* p_task_info) {
 }
 
 evar_task_t _null_task = {
+    0,
+    0,
     null_task_method,
     null_task_method,
     null_task_method,
@@ -381,6 +383,7 @@ evar_task_id_t evar__create_task(evar_task_t* p_task, void* p_task_data) {
         P_TASK(task) = p_task;
 
         p_task_info = P_TASK_INFO(task);
+        
         p_task_info->current_task    = task;
         p_task_info->parent_task     = _evar_current_task;
         p_task_info->p_task_data     = p_task_data; // with the call to initialize it is to be interpreted as initialization parameter
@@ -437,31 +440,38 @@ evar_task_id_t evar__create_task(evar_task_t* p_task, void* p_task_data) {
 }
 
 /*
- * Initializes a task message store in place.
+ * Initializes a task message store in place. The size of the buffer 
+ * is expected to be correct because of the way it is called from
+ * the task's own evar__initialize_message_store
  */
-evar_message_store_t* _evar__initialize_message_store(
-    void* p_message_store,
-    evar_message_count_t capacity,
-    evar_message_size_t message_size
-) {
+void _evar__initialize_message_store(void* p_message_store) {
 
+    evar_task_t* p_task;
+    evar_task_info_t* p_task_info;
     _evar_message_store_t* _p_message_store;
-    unsigned long message_buffer_size;
 
+    evar_assert(VALID(_evar_current_task));
+    evar_assert(DETACHED(_evar_current_task));
+    
+    p_task = P_TASK(_evar_current_task);
+    p_task_info = P_TASK_INFO(_evar_current_task);
+    
+    evar_assert(p_task->message_size > 0);  // note that both size and count are 16-bit
+    evar_assert(p_task->message_count > 0); // and also the buffer size is limited with 64K
+
+    evar_assert(p_message_store != NULL);
     _p_message_store = (_evar_message_store_t*)p_message_store;
-    message_buffer_size = capacity * message_size;
 
-    _p_message_store->capacity            = capacity;
-    _p_message_store->message_size        = message_size;
-    _p_message_store->p_message_buffer    = (unsigned char*)p_message_store + EVAR_MESSAGE_STORE_SIZE;
-    _p_message_store->message_buffer_size = message_buffer_size;
-    _p_message_store->count               = 0;
-    _p_message_store->head                = 0;
-    _p_message_store->tail                = 0;
+    _p_message_store->count = 0;
+    _p_message_store->head  = 0;
+    _p_message_store->tail  = 0;
+    evar_assert(((unsigned long)p_task->message_size) * ((unsigned long)p_task->message_count) <= (((unsigned long)((evar_message_size_t)-1))));
+    _p_message_store->size = p_task->message_size * p_task->message_count;
 
-    memset(_p_message_store->p_message_buffer, 0, (size_t)message_buffer_size);
+    memset(((unsigned char*)p_message_store) + (EVAR_MESSAGE_STORE_SIZE), 0, _p_message_store->size);
 
-    return (evar_message_store_t*)p_message_store;
+    evar_assert(p_task_info->p_message_store == NULL);
+    p_task_info->p_message_store = p_message_store;
 }
 
 /*
@@ -475,35 +485,38 @@ evar_mq_result_t evar__send_message(
     evar_message_size_t message_size
 ) {
 
+    evar_task_t* p_task;
     _evar_message_store_t* p_message_store;
+
+    evar_device__sending_pin_on();
 
     evar_assert(VALID(receiver));
     evar_assert(DETACHED(receiver) || ACTIVE(receiver));
 
-    evar_device__sending_pin_on();
-
+    p_task = P_TASK(receiver);
+    
     p_message_store = P_MESSAGE_STORE(receiver);
     if (p_message_store == NULL) {
         evar_device__sending_pin_off();
         return EVAR_MQ_INVALID_QUEUE;
     }
 
-    if ((p_message == NULL) || (p_message_store->message_size != message_size)) {
+    if ((p_message == NULL) || (p_task->message_size != message_size)) {
         return EVAR_MQ_INVALID_PARAMETER;
     }
 
     evar_device__disable_interrupts();
 
-    if (p_message_store->count == p_message_store->capacity) {
+    if (p_message_store->count == p_task->message_count) {
         evar_device__disable_interrupts();
         evar_device__sending_pin_off();
         return EVAR_MQ_QUEUE_FULL;
     }
 
-    memcpy(p_message_store->p_message_buffer + p_message_store->tail, p_message, p_message_store->message_size);
+    memcpy(((unsigned char*)p_message_store) + (EVAR_MESSAGE_STORE_SIZE) + p_message_store->tail, p_message, message_size);
 
-    p_message_store->tail += p_message_store->message_size;
-    if (p_message_store->tail == p_message_store->message_buffer_size) {
+    p_message_store->tail += message_size;
+    if (p_message_store->tail == p_message_store->size) {
         p_message_store->tail = 0;
     }
 
@@ -548,21 +561,24 @@ evar_mq_result_t evar__send_async_message(
     evar_message_size_t message_size
 ) {
 
+    evar_task_t* p_task;
     _evar_message_store_t* p_message_store;
     evar_interrupts_enabled_t interrupts_enabled;
+
+    evar_device__sending_pin_on();
 
     evar_assert(VALID(receiver));
     evar_assert(DETACHED(receiver) || ACTIVE(receiver));
 
-    evar_device__sending_pin_on();
-
+    p_task = P_TASK(receiver);
+    
     p_message_store = P_MESSAGE_STORE(receiver);
     if (p_message_store == NULL) {
         evar_device__sending_pin_off();
         return EVAR_MQ_INVALID_QUEUE;
     }
 
-    if ((p_message == NULL) || (p_message_store->message_size != message_size)) {
+    if ((p_message == NULL) || (p_task->message_size != message_size)) {
         evar_device__sending_pin_off();
         return EVAR_MQ_INVALID_PARAMETER;
     }
@@ -576,7 +592,7 @@ evar_mq_result_t evar__send_async_message(
     evar_device__save_and_disable_interrupts(&interrupts_enabled);
 #endif
 
-    if (p_message_store->count == p_message_store->capacity) {
+    if (p_message_store->count == p_task->message_count) {
 #ifdef evar_device__restore_interrupts
         evar_device__restore_interrupts(interrupts_enabled);
 #else
@@ -586,10 +602,10 @@ evar_mq_result_t evar__send_async_message(
         return EVAR_MQ_QUEUE_FULL;
     }
 
-    memcpy(p_message_store->p_message_buffer + p_message_store->tail, p_message, p_message_store->message_size);
+    memcpy(((unsigned char*)p_message_store) + (EVAR_MESSAGE_STORE_SIZE) + p_message_store->tail, p_message, message_size);
 
-    p_message_store->tail += p_message_store->message_size;
-    if (p_message_store->tail == p_message_store->message_buffer_size) {
+    p_message_store->tail += message_size;
+    if (p_message_store->tail == p_message_store->size) {
         p_message_store->tail = 0;
     }
 
@@ -634,20 +650,23 @@ evar_mq_result_t _evar__receive_message(
     evar_message_size_t message_size
 ) {
 
+    evar_task_t* p_task;
     _evar_message_store_t* p_message_store;
+
+    evar_device__receiving_pin_on();
 
     evar_assert(VALID(_evar_current_task));
     evar_assert(DETACHED(_evar_current_task));
 
-    evar_device__receiving_pin_on();
-
+    p_task = P_TASK(_evar_current_task);
+    
     p_message_store = P_MESSAGE_STORE(_evar_current_task);
     if (p_message_store == NULL) {
         evar_device__receiving_pin_off();
         return EVAR_MQ_INVALID_QUEUE;
     }
 
-    if ((p_message == NULL) || (p_message_store->message_size != message_size)) {
+    if ((p_message == NULL) || (p_task->message_size != message_size)) {
         evar_device__receiving_pin_off();
         return EVAR_MQ_INVALID_PARAMETER;
     }
@@ -660,10 +679,10 @@ evar_mq_result_t _evar__receive_message(
         return EVAR_MQ_QUEUE_EMPTY;
     }
 
-    memcpy(p_message, p_message_store->p_message_buffer + p_message_store->head, message_size);
+    memcpy(p_message, ((unsigned char*)p_message_store) + (EVAR_MESSAGE_STORE_SIZE) + p_message_store->head, message_size);
 
-    p_message_store->head += p_message_store->message_size;
-    if (p_message_store->head == p_message_store->message_buffer_size) {
+    p_message_store->head += message_size;
+    if (p_message_store->head == p_message_store->size) {
         p_message_store->head = 0;
     }
 
@@ -684,20 +703,23 @@ evar_mq_result_t _evar__preview_message(
     evar_message_size_t message_size
 ) {
 
+    evar_task_t* p_task;
     _evar_message_store_t* p_message_store;
+
+    evar_device__receiving_pin_on();
 
     evar_assert(VALID(_evar_current_task));
     evar_assert(DETACHED(_evar_current_task));
 
-    evar_device__receiving_pin_on();
-
+    p_task = P_TASK(_evar_current_task);
+    
     p_message_store = P_MESSAGE_STORE(_evar_current_task);
     if (p_message_store == NULL) {
         evar_device__receiving_pin_off();
         return EVAR_MQ_INVALID_QUEUE;
     }
 
-    if ((p_message == NULL) || (p_message_store->message_size != message_size)) {
+    if ((p_message == NULL) || (p_task->message_size != message_size)) {
         evar_device__receiving_pin_off();
         return EVAR_MQ_INVALID_PARAMETER;
     }
@@ -710,7 +732,7 @@ evar_mq_result_t _evar__preview_message(
         return EVAR_MQ_QUEUE_EMPTY;
     }
 
-    memcpy(p_message, p_message_store->p_message_buffer + p_message_store->head, message_size);
+    memcpy(p_message, ((unsigned char*)p_message_store) + (EVAR_MESSAGE_STORE_SIZE) + p_message_store->head, message_size);
 
     evar_device__enable_interrupts();
 

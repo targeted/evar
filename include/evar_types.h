@@ -45,16 +45,12 @@ typedef unsigned short evar_message_count_t;
  */
 typedef void evar_message_store_t;
 
-#define _EVAR_MESSAGE_STORE_SIZE ( \
+#define EVAR_MESSAGE_STORE_SIZE (  \
     sizeof(evar_message_count_t) + \
     sizeof(evar_message_size_t)  + \
-    sizeof(unsigned char*)       + \
-    sizeof(unsigned long)        + \
-    sizeof(evar_message_count_t) + \
-    sizeof(unsigned long)        + \
-    sizeof(unsigned long)          \
+    sizeof(evar_message_size_t)  + \
+    sizeof(evar_message_size_t)    \
 )
-#define EVAR_MESSAGE_STORE_SIZE ((((_EVAR_MESSAGE_STORE_SIZE) + 3) / 4) * 4)
 
 /*
  * Handle to a task.
@@ -80,11 +76,16 @@ typedef struct {
  * included in the task code.
  */
 typedef struct {
+
+    evar_message_size_t  message_size;  // every instance of this task has a queue
+    evar_message_count_t message_count; // with that many messages each that large
+
     void  (*initialize) (evar_task_info_t* p_task_info);
     void  (*run)        (evar_task_info_t* p_task_info);
     void  (*wake_up)    (evar_task_info_t* p_task_info);
     void  (*receive)    (evar_task_info_t* p_task_info);
     void  (*cleanup)    (evar_task_info_t* p_task_info);
+
 } evar_task_t;
 
 #endif

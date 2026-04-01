@@ -7,6 +7,10 @@
 #ifndef EVAR_TASK_H
 #define EVAR_TASK_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <evar_types.h>
 #include <evar_device.h>
 #include <evar_assert.h>
@@ -32,24 +36,45 @@ evar_task_id_t evar__create_task(evar_task_t* p_task, void* p_task_data);
 evar_mq_result_t evar__send_message(evar_task_id_t receiver, void* p_message, evar_message_size_t message_size);
 
 /*
- * The internal structure of the message store is invisible here.
- * A task allocates it as an opaque array of bytes and uses
- * evar__initialize_message_store to initialize it.
+ * For a task to be able to receive messages EVAR_TASK_MESSAGE_COUNT variable
+ * must be defined set to the maximum number of messages in its queue.
  */
 
-#define MESSAGE_STORE_SIZE(CAPACITY) ((EVAR_MESSAGE_STORE_SIZE) + (CAPACITY) * sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)))
+#if defined(EVAR_TASK_MESSAGE_COUNT) && ((EVAR_TASK_MESSAGE_COUNT) > 0)
 
 /*
- * Private visibility, initializes the message store in place, returns the same pointer re-cast.
+ * If the task declares that it has a message queue, it must
+ * specify their structure in {task_name}_message_t.
  */
-evar_message_store_t* _evar__initialize_message_store(
-    void* p_message_store,
-    evar_message_count_t capacity,
-    evar_message_size_t message_size
+EVAR_ASSERT(sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)) > 0, sizeof_task_message);
+
+/*
+ * Internal structure of the message store is invisible here.
+ * The task allocates it as {task_name}_message_store_t.
+ */
+
+typedef struct {
+    unsigned char opaque[(EVAR_MESSAGE_STORE_SIZE) + (EVAR_TASK_MESSAGE_COUNT) * sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t))];
+} EVAR_CONCAT(EVAR_TASK_NAME, _message_store_t);
+        
+EVAR_ASSERT(
+    sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_store_t)) == 
+    (EVAR_MESSAGE_STORE_SIZE) + (EVAR_TASK_MESSAGE_COUNT) * sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)), 
+    sizeof_task_message_store_t
 );
 
-static evar_message_store_t* evar__initialize_message_store(void* p_message_store, evar_message_count_t capacity) {
-    return _evar__initialize_message_store(p_message_store, capacity, sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)));
+/*
+ * Private visibility, initializes the message store in place.
+ */
+void _evar__initialize_message_store(void* p_message_store);
+
+/*
+ * This function is supposed to be called from {task_name}__initialize 
+ * to initialize the task instance's message store. The buffer must be
+ * static, global or allocated, not on stack.
+ */
+static void evar__initialize_message_store(evar_message_store_t* p_message_store) {
+    _evar__initialize_message_store(p_message_store);
 }
 
 void EVAR_CONCAT(evar__initialize_message_store_, EVAR_TASK_NAME)(void) {
@@ -89,6 +114,8 @@ static evar_mq_result_t evar__preview_message(EVAR_CONCAT(EVAR_TASK_NAME, _messa
 void EVAR_CONCAT(evar__preview_message_, EVAR_TASK_NAME)(void) {
     (void)evar__preview_message; // mark as used
 }
+
+#endif
 
 /*
  * The following declarations lay out the task interface, the definitions
@@ -134,11 +161,21 @@ static void EVAR_CONCAT(EVAR_TASK_NAME, __cleanup)(evar_task_info_t* p_task_info
  * This is a class-like structure with methods and static members.
  */
 static evar_task_t EVAR_CONCAT(_, EVAR_TASK_NAME) = {
+    
+#if defined(EVAR_TASK_MESSAGE_COUNT) && ((EVAR_TASK_MESSAGE_COUNT) > 0)
+    (EVAR_TASK_MESSAGE_COUNT),
+    sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)),
+#else
+    0,
+    0,
+#endif
+
     EVAR_CONCAT(EVAR_TASK_NAME, __initialize),
     EVAR_CONCAT(EVAR_TASK_NAME, __run),
     EVAR_CONCAT(EVAR_TASK_NAME, __wake_up),
     EVAR_CONCAT(EVAR_TASK_NAME, __receive),
     EVAR_CONCAT(EVAR_TASK_NAME, __cleanup)
+            
 };
 
 /*
@@ -247,5 +284,9 @@ void evar__crash(unsigned short error, char* message);
  * Immediate device shutdown, hardware halt.
  */
 void evar__halt(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
