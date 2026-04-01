@@ -1,7 +1,5 @@
-extern "C" {
 #include <evar.h>
 #include <main_task.h>
-}
 
 void setup() {
     

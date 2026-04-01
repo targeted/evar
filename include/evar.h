@@ -1,6 +1,10 @@
 #ifndef EVAR_H
 #define EVAR_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <evar_types.h>
 
 /*
@@ -28,5 +32,9 @@ void evar__setup(evar_task_t* p_main_task, void* p_main_task_data);
  * device even after all the tasks have exited, just nothing is done after that.
  */
 void evar__loop(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
