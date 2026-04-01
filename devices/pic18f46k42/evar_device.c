@@ -42,7 +42,7 @@ void evar_device__initialize(void) {
 
     T6CLKbits.CS = 0b00110;       // timer source = MFINTOSC calibrated 31.25 KHz before prescaling
     T6CONbits.CKPS = 0b001;       // prescaling 1:2, effective 15625 Hz
-    T6CONbits.OUTPS = 0b0000;     // postcaling 1:1
+    T6CONbits.OUTPS = 0b0000;     // postscaling 1:1
 
     TMR6IF = 0;
     TMR6IE = 1;
