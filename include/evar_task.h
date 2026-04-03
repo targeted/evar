@@ -163,8 +163,8 @@ static void EVAR_CONCAT(EVAR_TASK_NAME, __cleanup)(evar_task_info_t* p_task_info
 static evar_task_t EVAR_CONCAT(_, EVAR_TASK_NAME) = {
     
 #if defined(EVAR_TASK_MESSAGE_COUNT) && ((EVAR_TASK_MESSAGE_COUNT) > 0)
-    (EVAR_TASK_MESSAGE_COUNT),
     sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)),
+    (EVAR_TASK_MESSAGE_COUNT),
 #else
     0,
     0,
