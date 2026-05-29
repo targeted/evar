@@ -383,7 +383,7 @@ evar_task_id_t evar__create_task(evar_task_t* p_task, void* p_task_data) {
         P_TASK(task) = p_task;
 
         p_task_info = P_TASK_INFO(task);
-        
+
         p_task_info->current_task    = task;
         p_task_info->parent_task     = _evar_current_task;
         p_task_info->p_task_data     = p_task_data; // with the call to initialize it is to be interpreted as initialization parameter
@@ -440,7 +440,7 @@ evar_task_id_t evar__create_task(evar_task_t* p_task, void* p_task_data) {
 }
 
 /*
- * Initializes a task message store in place. The size of the buffer 
+ * Initializes a task message store in place. The size of the buffer
  * is expected to be correct because of the way it is called from
  * the task's own evar__initialize_message_store
  */
@@ -452,10 +452,10 @@ void _evar__initialize_message_store(void* p_message_store) {
 
     evar_assert(VALID(_evar_current_task));
     evar_assert(DETACHED(_evar_current_task));
-    
+
     p_task = P_TASK(_evar_current_task);
     p_task_info = P_TASK_INFO(_evar_current_task);
-    
+
     evar_assert(p_task->message_size > 0);  // note that both size and count are 16-bit
     evar_assert(p_task->message_count > 0); // and also the buffer size is limited with 64K
 
@@ -494,7 +494,7 @@ evar_mq_result_t evar__send_message(
     evar_assert(DETACHED(receiver) || ACTIVE(receiver));
 
     p_task = P_TASK(receiver);
-    
+
     p_message_store = P_MESSAGE_STORE(receiver);
     if (p_message_store == NULL) {
         evar_device__sending_pin_off();
@@ -571,7 +571,7 @@ evar_mq_result_t evar__send_async_message(
     evar_assert(DETACHED(receiver) || ACTIVE(receiver));
 
     p_task = P_TASK(receiver);
-    
+
     p_message_store = P_MESSAGE_STORE(receiver);
     if (p_message_store == NULL) {
         evar_device__sending_pin_off();
@@ -643,7 +643,46 @@ evar_mq_result_t evar__send_async_message(
 }
 
 /*
+ * Used by a task to check if another task's message queue is full.
+ * This call is used to wait until the receiving task has capacity.
+ * Interrupt handlers and possibly other asynchronous sources
+ * should use evar__send_async_message.
+*/
+evar_mq_result_t evar__message_queue_full(
+    evar_task_id_t receiver
+) {
+
+    evar_task_t* p_task;
+    _evar_message_store_t* p_message_store;
+    unsigned char message_queue_full;
+
+    evar_device__sending_pin_on();
+
+    evar_assert(VALID(receiver));
+    evar_assert(DETACHED(receiver) || ACTIVE(receiver));
+
+    p_task = P_TASK(receiver);
+
+    p_message_store = P_MESSAGE_STORE(receiver);
+    if (p_message_store == NULL) {
+        evar_device__sending_pin_off();
+        return EVAR_MQ_INVALID_QUEUE;
+    }
+
+    evar_device__disable_interrupts();
+
+    message_queue_full = p_message_store->count == p_task->message_count ? 1 : 0;
+
+    evar_device__enable_interrupts();
+
+    evar_device__sending_pin_off();
+
+    return message_queue_full ? EVAR_MQ_QUEUE_FULL : EVAR_MQ_QUEUE_NOT_FULL;
+}
+
+/*
  * Returns the first message from the current task's queue. The received message is removed from the queue.
+ * If the receiving pointer buffer is NULL, nothing is returned, but could be used for checking.
  */
 evar_mq_result_t _evar__receive_message(
     void* p_message,
@@ -659,14 +698,14 @@ evar_mq_result_t _evar__receive_message(
     evar_assert(DETACHED(_evar_current_task));
 
     p_task = P_TASK(_evar_current_task);
-    
+
     p_message_store = P_MESSAGE_STORE(_evar_current_task);
     if (p_message_store == NULL) {
         evar_device__receiving_pin_off();
         return EVAR_MQ_INVALID_QUEUE;
     }
 
-    if ((p_message == NULL) || (p_task->message_size != message_size)) {
+    if (p_task->message_size != message_size) {
         evar_device__receiving_pin_off();
         return EVAR_MQ_INVALID_PARAMETER;
     }
@@ -679,7 +718,9 @@ evar_mq_result_t _evar__receive_message(
         return EVAR_MQ_QUEUE_EMPTY;
     }
 
-    memcpy(p_message, ((unsigned char*)p_message_store) + (EVAR_MESSAGE_STORE_SIZE) + p_message_store->head, message_size);
+    if (p_message != NULL) {
+        memcpy(p_message, ((unsigned char*)p_message_store) + (EVAR_MESSAGE_STORE_SIZE) + p_message_store->head, message_size);
+    }
 
     p_message_store->head += message_size;
     if (p_message_store->head == p_message_store->size) {
@@ -697,6 +738,7 @@ evar_mq_result_t _evar__receive_message(
 
 /*
  * Returns a copy of the first message for the current task, but does not remove it from the queue.
+ * If the receiving pointer buffer is NULL, nothing is returned, but could be used for checking.
  */
 evar_mq_result_t _evar__preview_message(
     void* p_message,
@@ -712,14 +754,14 @@ evar_mq_result_t _evar__preview_message(
     evar_assert(DETACHED(_evar_current_task));
 
     p_task = P_TASK(_evar_current_task);
-    
+
     p_message_store = P_MESSAGE_STORE(_evar_current_task);
     if (p_message_store == NULL) {
         evar_device__receiving_pin_off();
         return EVAR_MQ_INVALID_QUEUE;
     }
 
-    if ((p_message == NULL) || (p_task->message_size != message_size)) {
+    if (p_task->message_size != message_size) {
         evar_device__receiving_pin_off();
         return EVAR_MQ_INVALID_PARAMETER;
     }
@@ -732,13 +774,46 @@ evar_mq_result_t _evar__preview_message(
         return EVAR_MQ_QUEUE_EMPTY;
     }
 
-    memcpy(p_message, ((unsigned char*)p_message_store) + (EVAR_MESSAGE_STORE_SIZE) + p_message_store->head, message_size);
+    if (p_message != NULL) {
+        memcpy(p_message, ((unsigned char*)p_message_store) + (EVAR_MESSAGE_STORE_SIZE) + p_message_store->head, message_size);
+    }
 
     evar_device__enable_interrupts();
 
     evar_device__receiving_pin_off();
 
     return EVAR_MQ_SUCCESS;
+}
+
+/*
+ * Used to check if the current task's message queue contains any messages.
+ * This call is assuming the current task to be the implicit receiver.
+ */
+evar_mq_result_t evar__message_queue_empty(void) {
+
+    _evar_message_store_t* p_message_store;
+    unsigned char message_queue_empty;
+
+    evar_device__receiving_pin_on();
+
+    evar_assert(VALID(_evar_current_task));
+    evar_assert(DETACHED(_evar_current_task));
+
+    p_message_store = P_MESSAGE_STORE(_evar_current_task);
+    if (p_message_store == NULL) {
+        evar_device__receiving_pin_off();
+        return EVAR_MQ_INVALID_QUEUE;
+    }
+
+    evar_device__disable_interrupts();
+
+    message_queue_empty = p_message_store->count == 0 ? 1 : 0;
+
+    evar_device__enable_interrupts();
+
+    evar_device__receiving_pin_off();
+
+    return message_queue_empty ? EVAR_MQ_QUEUE_EMPTY : EVAR_MQ_QUEUE_NOT_EMPTY;
 }
 
 /*
@@ -858,6 +933,7 @@ evar_time_delta_t evar__get_time_delta(evar_timestamp_t* p_timestamp1, evar_time
 }
 
 /*
+ * This is an internal utility similar to evar__message_queue_empty.
  * Returns 1 if the task's message queue has messages in it,
  * 0 if the queue is empty, or is missing altogether.
  */

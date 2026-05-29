@@ -36,6 +36,14 @@ evar_task_id_t evar__create_task(evar_task_t* p_task, void* p_task_data);
 evar_mq_result_t evar__send_message(evar_task_id_t receiver, void* p_message, evar_message_size_t message_size);
 
 /*
+ * Used by a task to check if another task's message queue is full.
+ * This call is used to wait until the receiving task has capacity.
+ * Interrupt handlers and possibly other asynchronous sources
+ * should use evar__send_async_message.
+ */
+evar_mq_result_t evar__message_queue_full(evar_task_id_t receiver);
+
+/*
  * For a task to be able to receive messages EVAR_TASK_MESSAGE_COUNT variable
  * must be defined set to the maximum number of messages in its queue.
  */
@@ -114,6 +122,12 @@ static evar_mq_result_t evar__preview_message(EVAR_CONCAT(EVAR_TASK_NAME, _messa
 void EVAR_CONCAT(evar__preview_message_, EVAR_TASK_NAME)(void) {
     (void)evar__preview_message; // mark as used
 }
+
+/*
+ * Used to check if the current task's message queue contains any messages.
+ * This call is assuming the current task to be the implicit receiver.
+ */
+evar_mq_result_t evar__message_queue_empty(void);
 
 #endif
 

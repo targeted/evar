@@ -34,11 +34,13 @@ typedef unsigned char evar_mq_result_t;
 #define EVAR_MQ_SUCCESS            (0)
 #define EVAR_MQ_INVALID_QUEUE      (1)
 #define EVAR_MQ_QUEUE_FULL         (2)
-#define EVAR_MQ_QUEUE_EMPTY        (3)
-#define EVAR_MQ_INVALID_PARAMETER  (4)
+#define EVAR_MQ_QUEUE_NOT_FULL     (3)
+#define EVAR_MQ_QUEUE_EMPTY        (4)
+#define EVAR_MQ_QUEUE_NOT_EMPTY    (5)
+#define EVAR_MQ_INVALID_PARAMETER  (6)
 
-typedef unsigned short evar_message_size_t;
 typedef unsigned short evar_message_count_t;
+typedef unsigned short evar_message_size_t;
 
 /*
  * We don't want for the message store structure to be public, only its size.
