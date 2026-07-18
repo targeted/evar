@@ -76,5 +76,5 @@ void evar_device__halt(void) {
 
 /*
  * If any of the remaining board-specific things were declared in
- * evar_device_<board>.h as functions, they should be implemented here.
+ * evar_device.h as functions, they should be implemented here.
  */

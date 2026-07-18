@@ -64,10 +64,10 @@ EVAR_ASSERT(sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)) > 0, sizeof_task_mes
 typedef struct {
     unsigned char opaque[(EVAR_MESSAGE_STORE_SIZE) + (EVAR_TASK_MESSAGE_COUNT) * sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t))];
 } EVAR_CONCAT(EVAR_TASK_NAME, _message_store_t);
-        
+
 EVAR_ASSERT(
-    sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_store_t)) == 
-    (EVAR_MESSAGE_STORE_SIZE) + (EVAR_TASK_MESSAGE_COUNT) * sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)), 
+    sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_store_t)) ==
+    (EVAR_MESSAGE_STORE_SIZE) + (EVAR_TASK_MESSAGE_COUNT) * sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)),
     sizeof_task_message_store_t
 );
 
@@ -77,7 +77,7 @@ EVAR_ASSERT(
 void _evar__initialize_message_store(void* p_message_store);
 
 /*
- * This function is supposed to be called from {task_name}__initialize 
+ * This function is supposed to be called from {task_name}__initialize
  * to initialize the task instance's message store. The buffer must be
  * static, global or allocated, not on stack.
  */
@@ -175,7 +175,7 @@ static void EVAR_CONCAT(EVAR_TASK_NAME, __cleanup)(evar_task_info_t* p_task_info
  * This is a class-like structure with methods and static members.
  */
 static evar_task_t EVAR_CONCAT(_, EVAR_TASK_NAME) = {
-    
+
 #if defined(EVAR_TASK_MESSAGE_COUNT) && ((EVAR_TASK_MESSAGE_COUNT) > 0)
     sizeof(EVAR_CONCAT(EVAR_TASK_NAME, _message_t)),
     (EVAR_TASK_MESSAGE_COUNT),
@@ -189,7 +189,7 @@ static evar_task_t EVAR_CONCAT(_, EVAR_TASK_NAME) = {
     EVAR_CONCAT(EVAR_TASK_NAME, __wake_up),
     EVAR_CONCAT(EVAR_TASK_NAME, __receive),
     EVAR_CONCAT(EVAR_TASK_NAME, __cleanup)
-            
+
 };
 
 /*

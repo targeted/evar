@@ -312,7 +312,6 @@ static void initialize(void) {
 
     // now that the device is initialized, we pull all the diagnostic pins and LEDs down
 
-    evar_device__builtin_led_off();
     evar_device__timer_pin_off();
     evar_device__running_pin_off();
     evar_device__idle_pin_off();
@@ -1371,8 +1370,7 @@ static unsigned char schedule_task(unsigned short timer_ticks) {
 /*
  * The pair of functions evar__setup/evar__loop exist to support the Arduino-like environments
  * where the SDK provides the ticking time source and expects the setup/loop sequence.
- * Note that the device-specific function evar_device__get_timer_ticks must be implemented
- * to return the SDK's get_millis or something like that.
+ * Note that the device-specific primitive evar_device__get_timer_ticks must be provided.
  */
 void evar__setup(evar_task_t* p_main_task, void* p_main_task_data) {
     initialize();
@@ -1399,7 +1397,7 @@ void evar__run(evar_task_t* p_main_task, void* p_main_task_data) {
         switch (schedule_task(evar_device__get_timer_ticks())) {
             case EVAR_LOOP_IDLE:
                 evar_device__idle_pin_on();
-                evar_device__cpu_idle(); // put the CPU to sleep until the next interrupt (possibly timer)
+                evar_device__cpu_idle(); // put the CPU to sleep until the next interrupt (possibly clock timer)
                 evar_device__idle_pin_off();
             case EVAR_LOOP_ACTIVE:
                 continue; // for

@@ -84,7 +84,7 @@ _evar_clock_ticks_t _evar_clock_ticks;
 _evar_timestamp_t _evar_current_timestamp;
 
 /*
- * This will keep the previous value returned by evar_device__get_timer_ticks()
+ * This will keep the previous value obtained from evar_device__get_timer_ticks()
  */
 unsigned short _evar_prev_timer_ticks;
 

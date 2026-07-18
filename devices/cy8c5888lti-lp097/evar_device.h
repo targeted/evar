@@ -1,11 +1,13 @@
 /*
- * This is the support file for Arduino environment.
+ * This is the support file for Infineon/Cypress CY8C5888LTI-LP097.
  */
 
 #ifndef EVAR_DEVICE_H
 #define EVAR_DEVICE_H
 
-#include <Arduino.h>
+#include "project.h"
+#include <FS.h>
+#include <stdio.h>
 
 /*
  * Any device-specific initialization, executed once at startup.
@@ -20,8 +22,11 @@ void evar_device__initialize(void);
  * the scenes, and it can freely roll over and keep ticking.
  * For the timer frequency of 10KHz it overflows in 6.5 seconds,
  * during which time a scheduler pass must happen.
+ * This can be a unsigned short (void) function or a preprocessor
+ * define pointing to a volatile global unsigned short variable.
  */
-unsigned short evar_device__get_timer_ticks(void);
+extern volatile unsigned short evar_device__timer_ticks;
+#define evar_device__get_timer_ticks() (evar_device__timer_ticks)
 
 /*
  * Display debug message if possible, then shut down.
@@ -44,7 +49,7 @@ void evar_device__halt(void);
  * Put the CPU to sleep, keeping the interrupts enabled. Conceptually, this
  * should pause the execution until the next timer tick (or another interrupt).
  */
-#define evar_device__cpu_idle()
+#define evar_device__cpu_idle() __WFI()
 
 /*
  * This is only needed in a multi-core multi-threaded environment, where a CPU can be executing code on the side,
@@ -59,37 +64,33 @@ void evar_device__halt(void);
  * The type of variable to store the state of interrupts.
  * Can be a single 0/1 byte, or a 32-bit mask for example.
  */
-typedef unsigned char evar_interrupts_enabled_t;
+typedef uint8_t evar_interrupts_enabled_t;
 
 /*
  * Store the current state of interrupts into a variable, then disable the interrupts (if they were enabled).
- * Arduino does not support getting interrupts state, you either disable interrupts manually before calling 
- * evar__send_async_message, or modify this file according to the actual device.
  */
-#define evar_device__save_and_disable_interrupts(interrupts_enabled)
+#define evar_device__save_and_disable_interrupts(interrupts_enabled) interrupts_enabled = !CyEnterCriticalSection()
 
 /*
  * Restore the state of interrupts saved in evar_device__save_and_disable_interrupts.
- * Arduino does not support getting interrupts state, you either enable interrupts manually after calling 
- * evar__send_async_message, or modify this file according to the actual device.
  */
-#define evar_device__restore_interrupts(interrupts_enabled)
+#define evar_device__restore_interrupts(interrupts_enabled) CyExitCriticalSection(!interrupts_enabled)
 
 /*
  * Disable all interrupts.
  */
-#define evar_device__disable_interrupts() noInterrupts()
+#define evar_device__disable_interrupts() CyGlobalIntDisable
 
 /*
  * Enable all interrupts.
  */
-#define evar_device__enable_interrupts() interrupts()
+#define evar_device__enable_interrupts() CyGlobalIntEnable
 
 /*
  * Single-bit debug LED.
  */
-#define evar_device__builtin_led_on()  digitalWrite(LED_BUILTIN, HIGH)
-#define evar_device__builtin_led_off() digitalWrite(LED_BUILTIN, LOW)
+#define evar_device__builtin_led_on()
+#define evar_device__builtin_led_off()
 
 /*
  * The following definitions are used internally by the framework to configure and pulse output pins
@@ -123,5 +124,30 @@ typedef unsigned char evar_interrupts_enabled_t;
 
 #define evar_device__halted_pin_on()
 #define evar_device__halted_pin_off()
+
+#include <stdarg.h>
+
+#ifdef DEBUG
+    
+extern char debug_buf[128];
+
+#define DEBUG_PRINT(STR) \
+    if (1) { \
+        DEBUG_UART_PutString(STR); \
+    }
+
+#define DEBUG_PRINT1(FMT, ARG) \
+    if (1) { \
+        snprintf(debug_buf, sizeof(debug_buf), (FMT), (ARG)); \
+        DEBUG_UART_PutString(debug_buf); \
+    }
+
+#define DEBUG_PRINT2(FMT, ARG1, ARG2) \
+    if (1) { \
+        snprintf(debug_buf, sizeof(debug_buf), (FMT), (ARG1), (ARG2)); \
+        DEBUG_UART_PutString(debug_buf); \
+    }
+
+#endif
 
 #endif

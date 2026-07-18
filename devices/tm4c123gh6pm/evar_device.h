@@ -1,5 +1,5 @@
 /*
- * This is the support file for EK-TM4C123GXL board based on TM4C123GH6PM MCU.
+ * This is the support file for TM4C123GH6PM MCU.
  */
 
 #ifndef EVAR_DEVICE_H
@@ -38,8 +38,11 @@ void evar_device__initialize(void);
  * the scenes, and it can freely roll over and keep ticking.
  * For the timer frequency of 10KHz it overflows in 6.5 seconds,
  * during which time a scheduler pass must happen.
+ * This can be a unsigned short (void) function or a preprocessor
+ * define pointing to a volatile global unsigned short variable.
  */
-unsigned short evar_device__get_timer_ticks(void);
+extern volatile unsigned short evar_device__timer_ticks;
+#define evar_device__get_timer_ticks() (evar_device__timer_ticks)
 
 /*
  * Display debug message if possible, then shut down.
@@ -54,8 +57,8 @@ void evar_device__halt(void);
 /*
  * The following hardware-specific thunks could be declared as either functions
  * or defines, to inline intrinsics/assembler instructions and save time and stack.
- * From each pair uncomment one option and either implement it in evar_device_<board>.c
- * or inline in evar_device_<board>.h
+ * From each pair uncomment one option and either implement it in evar_device.c
+ * or inline in evar_device.h
  */
 
 /*
@@ -99,27 +102,6 @@ typedef bool evar_interrupts_enabled_t;
  */
 #define evar_device__enable_interrupts() IntMasterEnable()
 
-// tri-color LED for the application to use
-#define evar_device__builtin_r_led_on()  GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_1, GPIO_PIN_1)
-#define evar_device__builtin_r_led_off() GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_1, 0)
-#define evar_device__builtin_g_led_on()  GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_3, GPIO_PIN_3)
-#define evar_device__builtin_g_led_off() GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_3, 0)
-#define evar_device__builtin_b_led_on()  GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_2, GPIO_PIN_2)
-#define evar_device__builtin_b_led_off() GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_2, 0)
-
-// pseudo uni-color LED for the application to use
-#define evar_device__builtin_led_on() { \
-    evar_device__builtin_r_led_on(); \
-    evar_device__builtin_g_led_on(); \
-    evar_device__builtin_b_led_on(); \
-}
-
-#define evar_device__builtin_led_off() { \
-    evar_device__builtin_r_led_off(); \
-    evar_device__builtin_g_led_off(); \
-    evar_device__builtin_b_led_off(); \
-}
-
 /*
  * The following definitions are used internally by the framework to configure and pulse output pins
  * at certain moments, thus allowing timing/latency measurements and/or debugging with scope/LEDs.
@@ -148,17 +130,8 @@ typedef bool evar_interrupts_enabled_t;
 #define evar_device__receiving_pin_off()
 
 // turns on once when evar_device__crash has been called, never turns off after that
-#define evar_device__crashed_pin_on() { \
-    evar_device__builtin_r_led_on();  \
-    evar_device__builtin_g_led_off(); \
-    evar_device__builtin_b_led_off(); \
-}
-
-#define evar_device__crashed_pin_off() { \
-    evar_device__builtin_r_led_off(); \
-    evar_device__builtin_g_led_off(); \
-    evar_device__builtin_b_led_off(); \
-}
+#define evar_device__crashed_pin_on()
+#define evar_device__crashed_pin_off()
 
 // turns on when evar_device__halt has been called, never turns off after that
 #define evar_device__halted_pin_on()

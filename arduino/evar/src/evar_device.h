@@ -36,8 +36,8 @@ void evar_device__halt(void);
 /*
  * The following hardware-specific thunks could be declared as either functions
  * or defines, to inline intrinsics/assembler instructions and save time and stack.
- * From each pair uncomment one option and either implement it in evar_device_<board>.c
- * or inline in evar_device_<board>.h
+ * From each pair uncomment one option and either implement it in evar_device.c
+ * or inline in evar_device.h
  */
 
 /*
