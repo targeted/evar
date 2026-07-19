@@ -58,7 +58,9 @@ typedef void evar_message_store_t;
  * Handle to a task.
  */
 typedef unsigned char evar_task_id_t;
-#define EVAR_INVALID_TASK_ID (0xFF)
+#define EVAR_INVALID_TASK_ID  (0xFF)
+#define EVAR_TASK_INITIALIZED (0xFE)
+#define VALID_TASK_ID(task_id) ((task_id) < (EVAR_MAX_TASKS))
 
 typedef void evar_task_data_t;
 

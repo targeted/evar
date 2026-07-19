@@ -5,7 +5,8 @@
 #include <evar_config.h>
 
 EVAR_ASSERT((EVAR_MAX_TASKS) > 0, min_evar_max_tasks);
-EVAR_ASSERT((EVAR_MAX_TASKS) <= EVAR_INVALID_TASK_ID, max_evar_max_tasks);
+EVAR_ASSERT((EVAR_MAX_TASKS) <= EVAR_INVALID_TASK_ID, max_evar_max_tasks_1);
+EVAR_ASSERT((EVAR_MAX_TASKS) <= EVAR_TASK_INITIALIZED, max_evar_max_tasks_2);
 
 /*
  * Perpetual timestamp in microseconds, internal structure.

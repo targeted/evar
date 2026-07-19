@@ -427,7 +427,7 @@ evar_task_id_t evar__create_task(evar_task_t* p_task, void* p_task_data) {
         _evar_current_task = prev_current_task;
 
         if (LIST(task) == AVAILABLE_LIST) {
-            return EVAR_INVALID_TASK_ID; // the task exited after initialization
+            return EVAR_TASK_INITIALIZED; // the task exited after successful initialization
         }
 
     }
