@@ -128,7 +128,7 @@ typedef uint8_t evar_interrupts_enabled_t;
 #include <stdarg.h>
 
 #ifdef DEBUG
-    
+
 extern char debug_buf[128];
 
 #define DEBUG_PRINT(STR) \

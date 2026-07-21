@@ -37,7 +37,7 @@ void evar_device__halt(void) {
  */
 
 #ifdef DEBUG
-    
+
 char debug_buf[128];
 
 #endif
